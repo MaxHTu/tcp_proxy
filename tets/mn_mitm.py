@@ -13,11 +13,11 @@ class MininetNetwork:
     def mininet_2h_1s(self):
         self.net = Mininet()
 
-        #alice
+        # alice
         h1 = self.net.addHost('h1', ip='10.10.20.11/24', mac='3c:ec:ef:e3:9e:0c')
-        #bob
+        # bob
         h2 = self.net.addHost('h2', ip='10.10.20.13/24', mac='3c:ec:ef:e3:99:c2')
-        #mitm
+        # mitm
         h3 = self.net.addHost('h3', ip='0.0.0.0/24', mac='3c:ec:ef:e3:99:c3')
         s1 = self.net.addSwitch('s1', failMode='standalone')
         s2 = self.net.addSwitch('s2', failMode='standalone')
