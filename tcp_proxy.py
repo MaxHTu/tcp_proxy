@@ -1,6 +1,6 @@
 import asyncio
-import argparse
 import functools
+import yaml
 
 
 async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
@@ -64,15 +64,21 @@ async def start_proxy(src_host: str, src_port: str, dst_host: str, dst_port: str
 
 
 def main():
-    parser = argparse.ArgumentParser(description='TCP Proxy')
-    parser.add_argument("--src-host", default="0.0.0.0")
-    parser.add_argument("--src-port", type=int, default=8080)
-    parser.add_argument("--dst-host", required=True)
-    parser.add_argument("--dst-port", type=int, required=True)
-    args = parser.parse_args()
+    config_path = "config/config.yaml"
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    src_config = config.get("src", {})
+    dst_config = config.get("dst", {})
+
+    src_host = src_config.get("host", "0.0.0.0")
+    src_port = src_config.get("port", 8080)
+    dst_host = dst_config["host"]
+    dst_port = dst_config["port"]
 
     try:
-        asyncio.run(start_proxy(args.src_host, args.src_port, args.dst_host, args.dst_port))
+        asyncio.run(start_proxy(src_host, src_port, dst_host, dst_port))
     except KeyboardInterrupt:
         print("\n[*] Shutting down from keyboard interrupt...")
     except Exception as e:

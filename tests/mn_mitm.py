@@ -29,15 +29,18 @@ class MininetNetwork:
 
         self.net.start()
 
-        h3.cmd("ifconfig h3-eth0 10.10.20.12 netmask 255.255.255.0")
-        h3.cmd("ifconfig h3-eth1 10.10.21.12 netmask 255.255.255.0")
+        h3.cmd("ip link add br0 type bridge")
+        h3.cmd("ip link set h3-eth0 master br0")
+        h3.cmd("ip link set h3-eth1 master br0")
 
-        h2.cmd("ifconfig h2-eth0 10.10.21.13 netmask 255.255.255.0")
+        h3.cmd("ip addr flush dev h3-eth0")
+        h3.cmd("ip addr flush dev h3-eth1")
 
-        h1.cmd("ip route add default via 10.10.20.12")
-        h2.cmd("ip route add default via 10.10.21.12")
+        h3.cmd("ip addr add 10.10.20.13/24 dev br0")
 
-        h3.cmd("sysctl -w net.ipv4.ip_forward=1")
+        h3.cmd("ip link set br0 up")
+        h3.cmd("ip link set h3-eth0 up")
+        h3.cmd("ip link set h3-eth1 up")
 
         CLI(self.net)
 
