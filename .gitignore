@@ -246,3 +246,9 @@ fabric.properties
 
 # PyPI configuration file
 .pypirc
+
+# Test stuff
+*.pcap
+*.cache
+010.010.020.011.33694-010.010.020.013.40801
+010.010.020.013.40801-010.010.020.011.33694
