@@ -1,12 +1,12 @@
 import asyncio
 import functools
 import yaml
-
+import uvloop
 
 async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
     try:
         while True:
-            data = await reader.read(1504)
+            data = await reader.read(1514)
             if not data:
                 break
             print(f"[{direction}] [{data!r}]")
@@ -19,7 +19,7 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             writer.close()
         try:
             await writer.wait_closed()
-        except:
+        except Exception:
             pass
 
 async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asyncio.StreamWriter, dst_host: str, dst_port: int) -> None:
@@ -33,10 +33,7 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, "client->remote"))
         remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, "client<-remote"))
 
-        done, pending = await asyncio.wait([client_to_remote, remote_to_client], return_when=asyncio.FIRST_COMPLETED)
-
-        for task in pending:
-            task.cancel()
+        await asyncio.gather(client_to_remote, remote_to_client)
 
     except Exception as e:
         print(f"[!] Error connecting to remote host: {e}")
@@ -45,11 +42,11 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
             src_writer.close()
         try:
             await src_writer.wait_closed()
-        except:
+        except Exception:
             pass
     print(f"[*] Connection from {client_addr[0]}:{client_addr[1]} closed")
 
-async def start_proxy(src_host: str, src_port: str, dst_host: str, dst_port: str) -> None:
+async def start_proxy(src_host: str, src_port: int, dst_host: str, dst_port: int) -> None:
     handler = functools.partial(handle_connection, dst_host=dst_host, dst_port=dst_port)
     server = await asyncio.start_server(handler, src_host, src_port)
 
@@ -72,13 +69,13 @@ def main():
     src_config = config.get("src", {})
     dst_config = config.get("dst", {})
 
-    src_host = src_config.get("host", "0.0.0.0")
-    src_port = src_config.get("port", 8080)
-    dst_host = dst_config["host"]
-    dst_port = dst_config["port"]
+    src_host = src_config.get("host", "127.0.0.1")
+    src_port = src_config.get("port", 8000)
+    dst_host = dst_config.get("host", "127.0.0.1")
+    dst_port = dst_config.get("port", 9000)
 
     try:
-        asyncio.run(start_proxy(src_host, src_port, dst_host, dst_port))
+        uvloop.run(start_proxy(src_host, src_port, dst_host, dst_port))
     except KeyboardInterrupt:
         print("\n[*] Shutting down from keyboard interrupt...")
     except Exception as e:
