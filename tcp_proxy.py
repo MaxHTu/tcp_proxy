@@ -2,14 +2,25 @@ import asyncio
 import functools
 import yaml
 import uvloop
+from utils.decode_pickle import PickleDecoder
 
 async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
+    decoder = PickleDecoder()
     try:
         while True:
-            data = await reader.read(1514)
+            data = await reader.read(4096)
             if not data:
                 break
-            print(f"[{direction}] [{data!r}]")
+
+            decoded_messages  = decoder.add_data(data)
+            if decoded_messages:
+                print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
+                for i, msg in enumerate(decoded_messages, 1):
+                    print(f"[{direction}] Message {i}:")
+                    print(f"{msg}")
+            else:
+                print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
+
             writer.write(data)
             await writer.drain()
     except Exception as e:
