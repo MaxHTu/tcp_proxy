@@ -40,38 +40,48 @@ def get_original_dest(sock: socket.socket):
 
 async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asyncio.StreamWriter) -> None:
     client_addr = src_writer.get_extra_info('peername')
-    client_ip, client_port = client_addr
     sock = src_writer.get_extra_info('socket')
-    orig_dst_ip, orig_dst_port = get_original_dest(sock)
-    print(f"[*] New connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
-
-    remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    remote_socket.setblocking(False)
-    remote_socket.setsockopt(socket.SOL_IP, socket.IP_TRANSPARENT, 1)
 
     try:
-        remote_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        remote_socket.bind((client_ip, client_port))
+        orig_dst_ip, orig_dst_port = sock.getsockname()
+        client_ip, client_port = client_addr
+        print(f"[*] TPROXY connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
     except Exception as e:
-        print(f"[!] Error binding transparent socket: {e}")
-        src_writer.close()
-        return
-
-    loop = asyncio.get_running_loop()
-
+         print(f"[!] Error getting socket names: {e}")
+         src_writer.close()
+         await src_writer.wait_closed()
+         return
     try:
+        remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        remote_socket.setblocking(False)
+        remote_socket.setsockopt(socket.SOL_IP, socket.IP_TRANSPARENT, 1)
+
+        try:
+            remote_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            remote_socket.bind((client_ip, client_port))
+            print(f"[*] Outgoing socket bound to {client_ip}:{client_port}")
+        except Exception as e:
+            print(f"[!] Warning: Could not bind outgoing socket to {client_ip}:{client_port} (requires CAP_NET_ADMIN or root): {e}. Proceeding with default source.")
+            src_writer.close()
+            await src_writer.wait_closed()
+            return
+
+        loop = asyncio.get_running_loop()
+
         await loop.sock_connect(remote_socket, (orig_dst_ip, orig_dst_port))
 
-        remote_reader, remote_writer = await asyncio.open_connection(sock=remote_socket )
+        remote_reader, remote_writer = await asyncio.open_connection(sock=remote_socket)
         print(f"[*] Connected to original destination {orig_dst_ip}:{orig_dst_port}")
 
-        client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, "client->remote"))
-        remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, "client<-remote"))
+        client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}"))
+        remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}"))
 
         await asyncio.gather(client_to_remote, remote_to_client)
 
+    except ConnectionRefusedError:
+        print(f"[!] Connection refused by {orig_dst_ip}:{orig_dst_port}")
     except Exception as e:
-        print(f"[!] Error connecting to remote host: {e}")
+        print(f"[!] Error in handle_connection: {e}")
     finally:
         src_writer.close()
         await src_writer.wait_closed()
@@ -79,10 +89,13 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
 
 async def start_proxy(src_host: str, src_port: int) -> None:
     listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listening_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listening_socket.setsockopt(socket.SOL_IP, socket.IP_TRANSPARENT, 1)
+
     listening_socket.bind((src_host, src_port))
     listening_socket.listen(socket.SOMAXCONN)
     listening_socket.setblocking(False)
+
     server = await asyncio.start_server(handle_connection, sock=listening_socket)
 
     addr = server.sockets[0].getsockname()
