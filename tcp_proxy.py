@@ -14,6 +14,8 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             if not data:
                 break
 
+            #print(f"[{direction}] [{data!r}]")
+
             decoded_messages  = decoder.add_data(data)
             if decoded_messages:
                 print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
@@ -43,7 +45,7 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
     sock = src_writer.get_extra_info('socket')
 
     try:
-        orig_dst_ip, orig_dst_port = sock.getsockname()
+        orig_dst_ip, orig_dst_port = get_original_dest(sock)
         client_ip, client_port = client_addr
         print(f"[*] TPROXY connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
     except Exception as e:
