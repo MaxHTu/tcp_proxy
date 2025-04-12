@@ -1,9 +1,7 @@
 import pickle
 import struct
-
 import numpy as np
 from typing import Any, List, Optional
-from io import BytesIO
 import json
 
 
@@ -21,16 +19,16 @@ class PickleDecoder:
         while len(self.buffer) > 4:
             msg_len = struct.unpack('>I', self.buffer[:4])[0]
             if len(self.buffer) >= 4 + msg_len:
-                payload = self.buffer[4: 4 + msg_len]
+                payload = self.buffer[4:4 + msg_len]
                 del self.buffer[:4 + msg_len]
-                decoded_msg = self.decode_massage(payload)
+                decoded_msg = self.decode_message(payload)
                 formatted_output = PickleDecoder.format_message(decoded_msg)
                 messages.append(formatted_output)
             else:
                 break
         return messages
 
-    def decode_massage(self, msg_data: bytes) -> Any:
+    def decode_message(self, msg_data: bytes) -> Any:
         if msg_data.startswith(b'\x80\x04\x95'):
             try:
                 return pickle.loads(msg_data)
@@ -38,7 +36,11 @@ class PickleDecoder:
                 return f"Failed to decode pickle: {e}"
         else:
             try:
-                return msg_data.decode('ascii', errors='ignore')
+                text = msg_data.decode('utf-8', errors='replace')
+                if text.startswith('#'):
+                    return text
+                else:
+                    return f"Text: {text}"
             except UnicodeDecodeError:
                 return f"Raw binary ({len(msg_data)} bytes)"
 

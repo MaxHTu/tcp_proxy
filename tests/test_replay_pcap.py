@@ -1,4 +1,6 @@
-from scapy.all import rdpcap, TCP, Raw
+from scapy.all import rdpcap
+from scapy.layers.inet import TCP
+from scapy.packet import Raw
 import socket
 import time
 
@@ -38,4 +40,16 @@ def replay_payloads(pcap_file, server_host, server_port, speed_factor=1.0):
 
 
 if __name__ == "__main__":
-    replay_payloads("revised.pcap", "127.0.0.1", 8000, 1.0)
+    import sys
+    import os
+
+    if len(sys.argv) >= 3:
+        host = sys.argv[1]
+        port = int(sys.argv[2])
+        pcap_path = sys.argv[3] if len(sys.argv) >= 4 else os.path.join(os.path.dirname(__file__), "revised.pcap")
+        speed_factor = float(sys.argv[4]) if len(sys.argv) >= 5 else 1.0
+
+        print(f"Replaying {pcap_path} to {host}:{port} at speed {speed_factor}x")
+        replay_payloads(pcap_path, host, port, speed_factor)
+    else:
+        print("Usage: python test_replay_pcap.py <host> <port> [pcap_path] [speed_factor]")
