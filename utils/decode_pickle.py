@@ -10,7 +10,7 @@ class PickleDecoder:
         self.buffer = bytearray()
 
     def add_data(self, data: bytes) -> List[str]:
-        if not data: # Handle empty chunks if they occur
+        if not data:
             return []
 
         self.buffer.extend(data)
