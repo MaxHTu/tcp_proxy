@@ -3,6 +3,8 @@ from time import sleep
 from mininet.net import Mininet
 from mininet.cli import CLI
 from mininet.log import setLogLevel, info
+import pickle
+import struct
 
 
 class MininetNetwork:
@@ -104,15 +106,64 @@ class MininetNetwork:
         h3.cmd('pkill -f "nc -l" || true')
         h3.cmd('nc -l -p 9000 -k> /tmp/received_data.bin 2>&1 &')
 
-    def run_replay_test(self):
+    def send_python_messages(self):
+        """
+        Send Python-specific messages (pickle-encoded) to test the proxy's handling
+        of Python objects and rule application.
+        """
         h1 = self.net.get('h1')
+        info('*** Sending Python messages to test proxy rules\n')
+
+        # Create test messages with different actions
+        messages = [
+            {"action": "update_tt_remote", "data": "This should be blocked"},
+            {"action": "get_status", "data": "This should be replayed 3 times"},
+            {"action": "normal_action", "data": "This should pass through normally"}
+        ]
 
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         venv_path = os.path.abspath(os.path.join(project_root, '.venv'))
         activation_cmd = f"cd {project_root} && source {venv_path}/bin/activate && "
 
-        pcap_path = os.path.join(project_root, 'tests', 'revised.pcap')
-        h1.cmd(f"{activation_cmd} python3 -u tests/test_replay_pcap.py 10.0.2.2 9000 {pcap_path}")
+        # Create a temporary Python script to send the messages
+        script_path = "/tmp/send_python_messages.py"
+        with open(script_path, "w") as f:
+            f.write("""
+import socket
+import pickle
+import struct
+import time
+
+def send_pickle_message(sock, message):
+    # Pickle the message
+    pickled_data = pickle.dumps(message)
+    
+    # Create a header with the message length
+    header = struct.pack('>I', len(pickled_data))
+    
+    # Send the header and the pickled data
+    sock.sendall(header + pickled_data)
+    print(f"Sent message with action: {message.get('action', 'unknown')}")
+
+# Connect to the server
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.connect(('10.0.2.2', 9000))
+    
+    # Send test messages
+    messages = [
+        {"action": "update_tt_remote", "data": "This should be blocked"},
+        {"action": "get_status", "data": "This should be replayed 3 times"},
+        {"action": "normal_action", "data": "This should pass through normally"}
+    ]
+    
+    for message in messages:
+        send_pickle_message(s, message)
+        time.sleep(1)  # Wait a bit between messages
+""")
+
+        # Run the script
+        h1.cmd(f"{activation_cmd} python3 {script_path}")
+        info('*** Python messages sent\n')
 
 if __name__ == '__main__':
     setLogLevel('info')
@@ -126,7 +177,8 @@ if __name__ == '__main__':
 
     mininet.start_proxy()
 
-    mininet.run_replay_test()
+    # Instead of running the replay test, send Python-specific messages
+    mininet.send_python_messages()
 
     CLI(mininet.net)
 

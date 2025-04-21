@@ -1,0 +1,103 @@
+/* Main container */
+#main-container {
+    width: 100%;
+    height: 100%;
+}
+
+/* Top container with logs */
+#top-container {
+    height: 70%;
+    margin-bottom: 1;
+}
+
+/* Bottom container with statistics and rules */
+#bottom-container {
+    height: 30%;
+}
+
+/* Left panel (Message Log) */
+.left-panel {
+    width: 50%;
+    height: 100%;
+    border: solid green;
+    margin-right: 1;
+}
+
+/* Right panel (Connection Log) */
+.right-panel {
+    width: 50%;
+    height: 100%;
+    border: solid blue;
+}
+
+/* Statistics panel */
+.stats-panel {
+    width: 30%;
+    height: 100%;
+    border: solid yellow;
+    margin-right: 1;
+}
+
+/* Rule panel */
+.rule-panel {
+    width: 70%;
+    height: 100%;
+    border: solid red;
+}
+
+/* Panel titles */
+.panel-title {
+    background: #336699;
+    color: white;
+    padding: 1 2;
+    text-align: center;
+    text-style: bold;
+    width: 100%;
+}
+
+/* Section titles */
+.section-title {
+    color: white;
+    padding: 0 1;
+    text-style: bold;
+    margin-top: 1;
+}
+
+/* Rule input containers */
+.rule-input {
+    margin: 0 1 1 1;
+    height: 3;
+}
+
+/* Input fields */
+Input {
+    margin-right: 1;
+}
+
+/* Buttons */
+Button {
+    background: #336699;
+    color: white;
+}
+
+Button:hover {
+    background: #4477aa;
+}
+
+/* Log widgets */
+#message-log, #connection-log {
+    height: 100%;
+    border: none;
+}
+
+/* Statistics items */
+#total-messages, #blocked-messages, #delayed-messages, #replayed-messages, #active-connections {
+    margin: 0 1;
+    padding: 0 1;
+}
+
+/* Footer */
+Footer {
+    background: #336699;
+    color: white;
+}

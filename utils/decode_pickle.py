@@ -10,7 +10,16 @@ class PickleDecoder:
         self.buffer = bytearray()
 
     def add_data(self, data: bytes) -> List[str]:
-        if not data: # Handle empty chunks if they occur
+        """
+        Add data to the buffer and extract complete messages.
+
+        Args:
+            data: The data to add to the buffer
+
+        Returns:
+            List of formatted message strings
+        """
+        if not data:
             return []
 
         self.buffer.extend(data)
@@ -24,6 +33,34 @@ class PickleDecoder:
                 decoded_msg = self.decode_message(payload)
                 formatted_output = PickleDecoder.format_message(decoded_msg)
                 messages.append(formatted_output)
+            else:
+                break
+        return messages
+
+    def add_data_with_raw(self, data: bytes) -> List[tuple]:
+        """
+        Add data to the buffer and extract complete messages with raw decoded messages.
+
+        Args:
+            data: The data to add to the buffer
+
+        Returns:
+            List of tuples (raw_message, formatted_message)
+        """
+        if not data:
+            return []
+
+        self.buffer.extend(data)
+        messages = []
+
+        while len(self.buffer) > 4:
+            msg_len = struct.unpack('>I', self.buffer[:4])[0]
+            if len(self.buffer) >= 4 + msg_len:
+                payload = self.buffer[4:4 + msg_len]
+                del self.buffer[:4 + msg_len]
+                decoded_msg = self.decode_message(payload)
+                formatted_output = PickleDecoder.format_message(decoded_msg)
+                messages.append((decoded_msg, formatted_output))
             else:
                 break
         return messages
