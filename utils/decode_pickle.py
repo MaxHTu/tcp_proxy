@@ -1,7 +1,7 @@
 import pickle
 import struct
 import numpy as np
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 import json
 
 
@@ -9,7 +9,7 @@ class PickleDecoder:
     def __init__(self):
         self.buffer = bytearray()
 
-    def add_data(self, data: bytes) -> List[str]:
+    def add_data(self, data: bytes) -> List[Tuple[Any, bytes]]:
         if not data:
             return []
 
@@ -19,14 +19,31 @@ class PickleDecoder:
         while len(self.buffer) > 4:
             msg_len = struct.unpack('>I', self.buffer[:4])[0]
             if len(self.buffer) >= 4 + msg_len:
+                full_message = self.buffer[:4 + msg_len]
                 payload = self.buffer[4:4 + msg_len]
                 del self.buffer[:4 + msg_len]
                 decoded_msg = self.decode_message(payload)
-                formatted_output = PickleDecoder.format_message(decoded_msg)
-                messages.append(formatted_output)
+
+                messages.append((decoded_msg, full_message))
             else:
                 break
         return messages
+
+    def get_buffer_info(self) -> str:
+        if not self.buffer:
+            return "Empty buffer"
+
+        buffer_hex = self.buffer.hex()
+        buffer_preview = buffer_hex[:100] + "..." if len(buffer_hex) > 100 else buffer_hex
+
+        if len(self.buffer) >= 4:
+            try:
+                msg_len = struct.unpack('>I', self.buffer[:4])[0]
+                return f"Buffer: {len(self.buffer)} bytes, Expected message length: {msg_len}, Preview: {buffer_preview}"
+            except Exception as e:
+                return f"Buffer: {len(self.buffer)} bytes, Error unpacking length: {e}, Preview: {buffer_preview}"
+        else:
+            return f"Buffer: {len(self.buffer)} bytes (insufficient for length header), Preview: {buffer_preview}"
 
     def decode_message(self, msg_data: bytes) -> Any:
         if msg_data.startswith(b'\x80\x04\x95'):

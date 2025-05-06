@@ -48,4 +48,4 @@ class PayloadHandler:
         if delayed:
             print(f"[DELAY] Delayed message with action: {message.get('action')}")
 
-        return True
+        return True, []

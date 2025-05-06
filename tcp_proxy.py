@@ -4,10 +4,13 @@ import uvloop
 import socket
 import struct
 from utils.decode_pickle import PickleDecoder
+from utils.payload_handling import PayloadHandler
 
 
 async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
     decoder = PickleDecoder()
+    payload_handler = PayloadHandler()
+
     try:
         while True:
             data = await reader.read(4096)
@@ -16,17 +19,49 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
             #print(f"[{direction}] [{data!r}]")
 
-            decoded_messages  = decoder.add_data(data)
+            if direction.find("<-") != -1:
+                writer.write(data)
+                await writer.drain()
+
+                decoded_messages = decoder.add_data(data)
+                if decoded_messages:
+                    print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
+                    for i in range(len(decoded_messages)):
+                        msg, _ = decoded_messages[i]
+                        print(f"[{direction}] Message {i + 1}:")
+                        formatted_msg = PickleDecoder.format_message(msg)
+                        print(f"{formatted_msg}")
+                else:
+                    buffer_info = decoder.get_buffer_info()
+                    print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
+                    print(f"[{direction}] Buffer state: {buffer_info}")
+                continue
+
+            decoded_messages = decoder.add_data(data)
             if decoded_messages:
                 print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
-                for i, msg in enumerate(decoded_messages, 1):
-                    print(f"[{direction}] Message {i}:")
-                    print(f"{msg}")
-            else:
-                print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
 
-            writer.write(data)
-            await writer.drain()
+                for i in range(len(decoded_messages)):
+                    msg, original_data = decoded_messages[i]
+                    print(f"[{direction}] Message {i + 1}:")
+                    formatted_msg = PickleDecoder.format_message(msg)
+                    print(f"{formatted_msg}")
+
+                    should_forward, _ = await payload_handler.process_messages(msg)
+                    if not should_forward:
+                        print(f"[{direction}] Message {i + 1} blocked by rules")
+                        continue
+
+                    writer.write(original_data)
+                    await writer.drain()
+            else:
+                buffer_info = decoder.get_buffer_info()
+                print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
+                print(f"[{direction}] Buffer state: {buffer_info}")
+
+                writer.write(data)
+                await writer.drain()
+
     except Exception as e:
         print(f"[!] Error forwarding data ({direction}): {e}")
     finally:
