@@ -55,7 +55,7 @@ class MininetNetwork:
         h2.cmd('iptables -t mangle -A DIVERT -j MARK --set-mark 1')
         h2.cmd('iptables -t mangle -A DIVERT -j ACCEPT')
 
-        h2.cmd('iptables -t mangle -A PREROUTING -p tcp -s 10.0.1.1 -d 10.0.2.2 --dport 9000 -j TPROXY --on-port 8000 --tproxy-mark 1')
+        h2.cmd('iptables -t mangle -A PREROUTING -p tcp --dport 9000 -j TPROXY --on-port 8000 --tproxy-mark 1')
 
         h2.cmd('iptables -t mangle -A PREROUTING -p tcp -m socket -j DIVERT')
 
@@ -116,6 +116,8 @@ class MininetNetwork:
         pcap_path = os.path.join(project_root, 'tests', 'revised.pcap')
         output = h1.cmd(f"{activation_cmd} python3 -u tests/test_replay_pcap.py 10.0.2.2 9000 {pcap_path}")
 
+
+
 if __name__ == '__main__':
     setLogLevel('info')
 
@@ -130,6 +132,6 @@ if __name__ == '__main__':
 
     mininet.run_replay_test()
 
-    CLI(mininet.net)
+    os.system('sudo chmod 777 ../proxy.log')
 
     mininet.cleanup_network()
