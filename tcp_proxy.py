@@ -23,7 +23,12 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                 writer.write(data)
                 await writer.drain()
 
+                print(f"[DEBUG] [{direction}] About to call add_data with {len(data)} bytes of data")
+                print(f"[DEBUG] [{direction}] Data preview: {data[:50].hex()}")
                 decoded_messages = decoder.add_data(data)
+                print(f"[DEBUG] [{direction}] add_data returned: {decoded_messages}")
+                print(f"[DEBUG] [{direction}] Type of decoded_messages: {type(decoded_messages)}")
+
                 if decoded_messages:
                     print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
                     for i in range(len(decoded_messages)):
@@ -37,7 +42,12 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                     print(f"[{direction}] Buffer state: {buffer_info}")
                 continue
 
+            print(f"[DEBUG] [{direction}] About to call add_data with {len(data)} bytes of data")
+            print(f"[DEBUG] [{direction}] Data preview: {data[:50].hex()}")
             decoded_messages = decoder.add_data(data)
+            print(f"[DEBUG] [{direction}] add_data returned: {decoded_messages}")
+            print(f"[DEBUG] [{direction}] Type of decoded_messages: {type(decoded_messages)}")
+
             if decoded_messages:
                 print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
 
@@ -64,6 +74,8 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
     except Exception as e:
         print(f"[!] Error forwarding data ({direction}): {e}")
+        import traceback
+        traceback.print_exc()
     finally:
             writer.close()
             await writer.wait_closed()
@@ -119,6 +131,8 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         print(f"[!] Connection refused by {orig_dst_ip}:{orig_dst_port}")
     except Exception as e:
         print(f"[!] Error in handle_connection: {e}")
+        import traceback
+        traceback.print_exc()  # Add full stack trace
     finally:
         src_writer.close()
         await src_writer.wait_closed()

@@ -10,7 +10,9 @@ class PickleDecoder:
         self.buffer = bytearray()
 
     def add_data(self, data: bytes) -> List[Tuple[Any, bytes]]:
+        print(f"[DEBUG] add_data received {len(data) if data else 0} bytes")
         if not data:
+            print("[DEBUG] No data received, returning empty list")
             return []
 
         self.buffer.extend(data)
@@ -27,6 +29,10 @@ class PickleDecoder:
                 messages.append((decoded_msg, full_message))
             else:
                 break
+        print(f"[DEBUG] add_data returning {len(messages)} messages")
+        if not messages:
+            print(f"[DEBUG] Buffer state: {self.get_buffer_info()}")
+
         return messages
 
     def get_buffer_info(self) -> str:
@@ -46,10 +52,12 @@ class PickleDecoder:
             return f"Buffer: {len(self.buffer)} bytes (insufficient for length header), Preview: {buffer_preview}"
 
     def decode_message(self, msg_data: bytes) -> Any:
+        print(f"[DEBUG] decode_message received {len(msg_data)} bytes starting with {msg_data[:10].hex()}")
         if msg_data.startswith(b'\x80\x04\x95'):
             try:
                 return pickle.loads(msg_data)
             except Exception as e:
+                print(f"[DEBUG] Pickle decode error: {e}, data: {msg_data[:50].hex()}")
                 return f"Failed to decode pickle: {e}"
         else:
             try:
@@ -59,6 +67,7 @@ class PickleDecoder:
                 else:
                     return f"Text: {text}"
             except UnicodeDecodeError:
+                print(f"[DEBUG] Binary data: {msg_data[:50].hex()}")
                 return f"Raw binary ({len(msg_data)} bytes)"
 
     @staticmethod
