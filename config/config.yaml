@@ -4,8 +4,8 @@ src:
 
 payload_handling:
  delay:
-   - action: "get_remote_time"
-     delay_ms: 500
+   - action: ""
+     delay_ms: 
 
  block:
-   - action: "update_tt_remote"
+   - action: ""
