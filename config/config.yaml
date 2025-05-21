@@ -5,7 +5,7 @@ src:
 payload_handling:
  delay:
    - action: ""
-     delay_ms: 
+     delay_ms: 0
 
  block:
    - action: ""

@@ -24,7 +24,7 @@ class PayloadHandler:
             if isinstance(rule, dict) and "action" in rule and "delay_ms" in rule:
                 action = rule["action"]
                 delay_ms = rule.get("delay_ms", 0)
-                if delay_ms > 0:
+                if delay_ms is not None and delay_ms > 0:
                     delay_rules[action] = delay_ms
                 else:
                     print(f"[!] Warning: Delay rule for action '{action}' has non‑positive delay_ms. Ignoring.")
@@ -36,7 +36,7 @@ class PayloadHandler:
 
         return delay_rules, block_rules
 
-    async def process_messages(self, message:Any):
+    async def process_messages(self, message: Any) -> Tuple[bool, List[Any]]:
         if not isinstance(message, dict):
             return True, []
 
@@ -49,3 +49,4 @@ class PayloadHandler:
             print(f"[DELAY] Delayed message with action: {message.get('action')}")
 
         return True, []
+
