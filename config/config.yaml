@@ -10,6 +10,17 @@ payload_handling:
         delay_ms: 0
     block:
       - action: ""
+    insert_data: # New section for global insert_data rules
+      - action: "global_insert_test_bytes"
+        data: "Hello from global rule"
+        data_type: "bytes" # "bytes" or "hex"
+        position: "before" # "before" or "after"
+        delay_sec: 0 # Seconds to wait after proxy start
+      - action: "global_insert_test_hex"
+        data: "aabbccddeeff"
+        data_type: "hex"
+        position: "after"
+        delay_sec: 5
 
   # Direction-specific rules
   directions:
@@ -22,6 +33,12 @@ payload_handling:
           delay_ms: 0
       block:
         - action: ""
+      insert_data: # New section for direction-specific insert_data rules
+        - action: "alice_insert_test_bytes"
+          data: "Data for Bob"
+          data_type: "bytes"
+          position: "before"
+          delay_sec: 0
 
     # Rules for traffic from Bob to Alice
     bob_to_alice:
@@ -32,3 +49,9 @@ payload_handling:
           delay_ms: 0
       block:
         - action: ""
+      insert_data:
+        - action: "bob_insert_test_hex"
+          data: "0102030405"
+          data_type: "hex"
+          position: "after"
+          delay_sec: 10
