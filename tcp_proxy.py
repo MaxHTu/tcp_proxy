@@ -17,56 +17,42 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             if not data:
                 break
 
-            #print(f"[{direction}] [{data!r}]")
+            original_data = data
 
-            if direction.find("<-") != -1:
-                writer.write(data)
-                await writer.drain()
+            message_pairs = decoder.add_data_with_raw(data)
 
-                decoded_messages = decoder.add_data(data)
-                if decoded_messages:
-                    print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
-                    for i in range(len(decoded_messages)):
-                        msg, _ = decoded_messages[i]
-                        print(f"[{direction}] Message {i + 1}:")
-                        formatted_msg = PickleDecoder.format_message(msg)
-                        print(f"{formatted_msg}")
-                else:
-                    buffer_info = decoder.get_buffer_info()
-                    print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
-                    print(f"[{direction}] Buffer state: {buffer_info}")
-                continue
-
-            decoded_messages = decoder.add_data(data)
-            if decoded_messages:
-                print(f"[{direction}] Decoded {len(decoded_messages)} message(s):")
-
-                for i in range(len(decoded_messages)):
-                    msg, original_data = decoded_messages[i]
-                    print(f"[{direction}] Message {i + 1}:")
-                    formatted_msg = PickleDecoder.format_message(msg)
+            if message_pairs:
+                print(f"[{direction}] Decoded {len(message_pairs)} message(s):")
+                for i, (_, formatted_msg) in enumerate(message_pairs, 1):
+                    print(f"[{direction}] Message {i}:")
                     print(f"{formatted_msg}")
-
-                    should_forward, _ = await payload_handler.process_messages(msg)
-                    if not should_forward:
-                        print(f"[{direction}] Message {i + 1} blocked by rules")
-                        continue
-
-                    writer.write(original_data)
-                    await writer.drain()
             else:
-                buffer_info = decoder.get_buffer_info()
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
-                print(f"[{direction}] Buffer state: {buffer_info}")
 
-                writer.write(data)
+            should_forward = True
+            all_replayed_messages = []
+
+            for raw_msg, _ in message_pairs:
+                should_forward, replayed_messages = await (payload_handler.process_messages(raw_msg))
+
+                all_replayed_messages.extend(replayed_messages)
+
+                if not should_forward:
+                    break
+
+            if should_forward:
+                writer.write(original_data)
                 await writer.drain()
+            else:
+                print(f"[{direction}] Message blocked by rules")
 
     except Exception as e:
         print(f"[!] Error forwarding data ({direction}): {e}")
+        # import traceback
+        # traceback.print_exc()
     finally:
-            writer.close()
-            await writer.wait_closed()
+        writer.close()
+        await writer.wait_closed()
 
 def get_original_dest(sock: socket.socket):
     SO_ORIGINAL_DST = 80
@@ -119,6 +105,8 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         print(f"[!] Connection refused by {orig_dst_ip}:{orig_dst_port}")
     except Exception as e:
         print(f"[!] Error in handle_connection: {e}")
+        #  import traceback
+        # traceback.print_exc()
     finally:
         src_writer.close()
         await src_writer.wait_closed()

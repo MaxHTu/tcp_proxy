@@ -114,7 +114,7 @@ class MininetNetwork:
         activation_cmd = f"cd {project_root} && source {venv_path}/bin/activate && "
 
         pcap_path = os.path.join(project_root, 'tests', 'revised.pcap')
-        output = h1.cmd(f"{activation_cmd} python3 -u tests/test_replay_pcap.py 10.0.2.2 9000 {pcap_path}")
+        output = h1.cmd(f"{activation_cmd} python3 -u tests/test_replay_pcap.py 10.0.2.2 9000 {pcap_path} 10.0")
 
 
 
