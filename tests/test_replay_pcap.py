@@ -52,4 +52,4 @@ if __name__ == "__main__":
         print(f"Replaying {pcap_path} to {host}:{port} at speed {speed_factor}x")
         replay_payloads(pcap_path, host, port, speed_factor)
     else:
-        print("Usage: python test_replay_pcap.py <host> <port> [pcap_path] [speed_factor]")
+        print("Usage: python tests/test_replay_pcap.py <host> <port> [pcap_path] [speed_factor]")

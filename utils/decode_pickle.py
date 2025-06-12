@@ -18,7 +18,7 @@ class PickleDecoder:
         self.buffer.extend(data)
         messages = []
 
-        while len(self.buffer) > 4:
+        while len(self.buffer) >= 4:
             msg_len = struct.unpack('>I', self.buffer[:4])[0]
             if len(self.buffer) >= 4 + msg_len:
                 full_message = self.buffer[:4 + msg_len]

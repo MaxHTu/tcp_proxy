@@ -3,9 +3,28 @@ src:
  port: 8000
 
 payload_handling:
- delay:
-   - action: ""
-     delay_ms: 0
+  global:
+    delay:
+      - action: ""
+        delay_ms: 0
+    block:
+      - action: ""
 
- block:
-   - action: ""
+  directions:
+    alice_to_bob:
+      source_ip: "10.10.20.11"
+      target_ip: "10.10.20.13"
+      delay:
+        - action: ""
+          delay_ms: 0
+      block:
+        - action: ""
+
+    bob_to_alice:
+      source_ip: "10.10.20.13"
+      target_ip: "10.10.20.11"
+      delay:
+        - action: ""
+          delay_ms: 0
+      block:
+        - action: ""

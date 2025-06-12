@@ -7,15 +7,17 @@ from utils.decode_pickle import PickleDecoder
 from utils.payload_handling import PayloadHandler
 
 
-async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
+async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str, source_ip: str, target_ip: str) -> None:
     decoder = PickleDecoder()
     payload_handler = PayloadHandler()
 
     try:
         while True:
-            data = await reader.read(4096)
+            data = await reader.read(16384)
             if not data:
                 break
+
+            # print(f"[DEBUG] {direction}] [{data!r}")
 
             original_data = data
 
@@ -30,12 +32,9 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
 
             should_forward = True
-            all_replayed_messages = []
 
             for raw_msg, _ in message_pairs:
-                should_forward, replayed_messages = await (payload_handler.process_messages(raw_msg))
-
-                all_replayed_messages.extend(replayed_messages)
+                should_forward = await payload_handler.process_messages(raw_msg, source_ip, target_ip)
 
                 if not should_forward:
                     break
@@ -96,8 +95,8 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         remote_reader, remote_writer = await asyncio.open_connection(sock=remote_socket)
         print(f"[*] Connected to original destination {orig_dst_ip}:{orig_dst_port}")
 
-        client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}"))
-        remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}"))
+        client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}", client_ip, orig_dst_ip))
+        remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}", orig_dst_ip, client_ip))
 
         await asyncio.gather(client_to_remote, remote_to_client)
 
