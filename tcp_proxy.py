@@ -32,16 +32,28 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
 
             should_forward = True
+            insertions = []
 
             for raw_msg, _ in message_pairs:
-                should_forward = await payload_handler.process_messages(raw_msg, source_ip, target_ip)
+                should_forward, msg_insertions = await payload_handler.process_messages(raw_msg, source_ip, target_ip)
+                insertions.extend(msg_insertions)
 
                 if not should_forward:
                     break
 
             if should_forward:
+                for insert_data, position, _ in insertions:
+                    if position == "before":
+                        writer.write(insert_data)
+                        await writer.drain()
+                
                 writer.write(original_data)
                 await writer.drain()
+
+                for insert_data, position, _ in insertions:
+                    if position == "after":
+                        writer.write(insert_data)
+                        await writer.drain()
             else:
                 print(f"[{direction}] Message blocked by rules")
 

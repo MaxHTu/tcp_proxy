@@ -3,6 +3,7 @@ import asyncio
 from typing import Dict, Any, Tuple, Optional, List, Set
 from utils.delay_action import DelayAction
 from utils.block_action import BlockAction
+from utils.insert_action import InsertAction
 
 class PayloadHandler:
     def __init__(self, config_path: str = "config/config.yaml"):
@@ -11,6 +12,7 @@ class PayloadHandler:
         self.direction_rules = self.parse_direction_rules()
         self.global_delay_action = DelayAction(self.global_rules["delay"])
         self.global_block_action = BlockAction(self.global_rules["block"])
+        self.global_insert_action = InsertAction(self.global_rules["insert"])
 
     def load_config(self, config_path: str):
         with open(config_path, "r") as f:
@@ -35,7 +37,16 @@ class PayloadHandler:
             if isinstance(rule, dict) and "action" in rule:
                 block_rules.add(rule["action"])
 
-        return {"delay": delay_rules, "block": block_rules}
+        insert_rules = []
+        for rule in global_rules.get("insert", []):
+            if isinstance(rule, dict) and "action" in rule and "data" in rule:
+                insert_rules.append(rule)
+
+        return {
+            "delay": delay_rules,
+            "block": block_rules,
+            "insert": insert_rules
+        }
 
     def parse_direction_rules(self) -> Dict[str, Dict[str, Any]]:
         payload_handling = self.config["payload_handling"]
@@ -57,11 +68,17 @@ class PayloadHandler:
                 if isinstance(rule, dict) and "action" in rule:
                     block_rules.add(rule["action"])
 
+            insert_rules = []
+            for rule in direction_config.get("insert", []):
+                if isinstance(rule, dict) and "action" in rule and "data" in rule:
+                    insert_rules.append(rule)
+
             direction_rules[direction_name] = {
                 "source_ip": direction_config.get("source_ip"),
                 "target_ip": direction_config.get("target_ip"),
                 "delay": delay_rules,
-                "block": block_rules
+                "block": block_rules,
+                "insert": insert_rules
             }
 
         return direction_rules
@@ -100,4 +117,15 @@ class PayloadHandler:
             if delayed:
                 print(f"[DELAY] Delayed message with action: {message.get('action')} (direction: {direction})")
 
-        return True, []
+        insertions = []
+        
+        global_insertions = await self.global_insert_action.get_insertions(message)
+        insertions.extend(global_insertions)
+        
+        if direction:
+            direction_config = self.direction_rules[direction]
+            insert_action = InsertAction(direction_config["insert"])
+            direction_insertions = await insert_action.get_insertions(message)
+            insertions.extend(direction_insertions)
+
+        return True, insertions

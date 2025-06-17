@@ -9,6 +9,11 @@ payload_handling:
         delay_ms: 0
     block:
       - action: ""
+    insert:
+      - action: ""
+        position: "before"
+        data: "deadbeef"
+        repeat: 1
 
   directions:
     alice_to_bob:
@@ -19,6 +24,16 @@ payload_handling:
           delay_ms: 0
       block:
         - action: ""
+      insert:
+        - action: ""
+          position: "after"
+          data: "deadbeef"
+          repeat: 3
+        - action: ""
+          position: "before"
+          data: "deadbeef"
+          delay_ms: 100
+          repeat: true
 
     bob_to_alice:
       source_ip: "10.10.20.13"
@@ -28,3 +43,8 @@ payload_handling:
           delay_ms: 0
       block:
         - action: ""
+      insert:
+        - action: ""
+          position: "before"
+          data: "deadbeef"
+          repeat: false
