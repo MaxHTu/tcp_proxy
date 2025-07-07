@@ -13,6 +13,7 @@ class PayloadHandler:
         self.global_delay_action = DelayAction(self.global_rules["delay"])
         self.global_block_action = BlockAction(self.global_rules["block"])
         self.global_insert_action = InsertAction(self.global_rules["insert"])
+        self.attack_mode = self.parse_attack_mode()
 
     def load_config(self, config_path: str):
         with open(config_path, "r") as f:
@@ -82,6 +83,26 @@ class PayloadHandler:
             }
 
         return direction_rules
+
+    def parse_attack_mode(self) -> Dict[str, Dict[str, Any]]:
+        attack_mode = self.config.get("attack_mode", {})
+        parsed = {}
+        for direction, settings in attack_mode.items():
+            parsed[direction] = {
+                "enabled": settings.get("enabled", False),
+                "malicious_pickle_payload": settings.get("malicious_pickle_payload", ""),
+                "log": settings.get("log", False)
+            }
+        return parsed
+
+    def is_attack_mode_enabled(self, direction: str) -> bool:
+        return self.attack_mode.get(direction, {}).get("enabled", False)
+
+    def get_attack_payload(self, direction: str) -> str:
+        return self.attack_mode.get(direction, {}).get("malicious_pickle_payload", "")
+
+    def should_log_attack(self, direction: str) -> bool:
+        return self.attack_mode.get(direction, {}).get("log", False)
 
     def get_matching_direction(self, source_ip: str, target_ip: str) -> Optional[str]:
         for direction_name, direction_config in self.direction_rules.items():

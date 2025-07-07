@@ -25,7 +25,7 @@ payload_handling:
       block:
         - action: ""
       insert:
-        - action: ""
+        - action: "u"
           position: "after"
           data: "deadbeef"
           repeat: 3
@@ -48,3 +48,13 @@ payload_handling:
           position: "before"
           data: "deadbeef"
           repeat: false
+
+attack_mode:
+  alice_to_bob:
+    enabled: true
+    malicious_pickle_payload: "800495abcdef..."
+    log: true
+  bob_to_alice:
+    enabled: false
+    malicious_pickle_payload: ""
+    log: true

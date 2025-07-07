@@ -3,26 +3,24 @@ import yaml
 import uvloop
 import socket
 import struct
+import binascii
 from utils.decode_pickle import PickleDecoder
 from utils.payload_handling import PayloadHandler
+from utils.mitm_attack_handler import MitmAttackHandler
 
 
 async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str, source_ip: str, target_ip: str) -> None:
     decoder = PickleDecoder()
     payload_handler = PayloadHandler()
-
+    direction_name = payload_handler.get_matching_direction(source_ip, target_ip)
+    mitm_handler = MitmAttackHandler(direction_name, payload_handler)
     try:
         while True:
             data = await reader.read(16384)
             if not data:
                 break
-
-            # print(f"[DEBUG] {direction}] [{data!r}")
-
             original_data = data
-
             message_pairs = decoder.add_data_with_raw(data)
-
             if message_pairs:
                 print(f"[{direction}] Decoded {len(message_pairs)} message(s):")
                 for i, (_, formatted_msg) in enumerate(message_pairs, 1):
@@ -30,37 +28,32 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                     print(f"{formatted_msg}")
             else:
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
-
             should_forward = True
             insertions = []
-
             for raw_msg, _ in message_pairs:
-                should_forward, msg_insertions = await payload_handler.process_messages(raw_msg, source_ip, target_ip)
-                insertions.extend(msg_insertions)
-
+                should_forward = await mitm_handler.process_message(raw_msg, original_data, writer)
                 if not should_forward:
                     break
-
+                should_forward2, msg_insertions = await payload_handler.process_messages(raw_msg, source_ip, target_ip)
+                insertions.extend(msg_insertions)
+                if not should_forward2:
+                    should_forward = False
+                    break
             if should_forward:
                 for insert_data, position, _ in insertions:
                     if position == "before":
                         writer.write(insert_data)
                         await writer.drain()
-                
                 writer.write(original_data)
                 await writer.drain()
-
                 for insert_data, position, _ in insertions:
                     if position == "after":
                         writer.write(insert_data)
                         await writer.drain()
             else:
                 print(f"[{direction}] Message blocked by rules")
-
     except Exception as e:
         print(f"[!] Error forwarding data ({direction}): {e}")
-        # import traceback
-        # traceback.print_exc()
     finally:
         writer.close()
         await writer.wait_closed()
