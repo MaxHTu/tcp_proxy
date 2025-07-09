@@ -6,8 +6,12 @@ from utils.block_action import BlockAction
 from utils.insert_action import InsertAction
 
 class PayloadHandler:
-    def __init__(self, config_path: str = "config/config.yaml"):
-        self.config = self.load_config(config_path)
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.reload_from_config(self.config)
+
+    def reload_from_config(self, config):
+        self.config = config
         self.global_rules = self.parse_global_rules()
         self.direction_rules = self.parse_direction_rules()
         self.global_delay_action = DelayAction(self.global_rules["delay"])

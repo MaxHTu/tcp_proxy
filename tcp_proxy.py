@@ -5,12 +5,47 @@ import socket
 import struct
 from utils.decode_pickle import PickleDecoder
 from utils.payload_handling import PayloadHandler
+import threading
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# Shared config object
+global_config = {}
+config_lock = threading.Lock()
+
+# Shared PayloadHandler instance
+global_payload_handler = None
+
+def load_config(config_path):
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+def update_payload_handler():
+    global global_payload_handler
+    with config_lock:
+        global_payload_handler = PayloadHandler(config=global_config.copy())
+
+class ConfigReloader(FileSystemEventHandler):
+    def __init__(self, config_path):
+        self.config_path = config_path
+
+    def on_modified(self, event):
+        if event.src_path.endswith(self.config_path):
+            try:
+                new_config = load_config(self.config_path)
+                with config_lock:
+                    global_config.clear()
+                    global_config.update(new_config)
+                update_payload_handler()
+                print(f"[*] Config reloaded from {self.config_path}")
+            except Exception as e:
+                print(f"[!] Failed to reload config: {e}")
 
 
 async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str, source_ip: str, target_ip: str) -> None:
     decoder = PickleDecoder()
-    payload_handler = PayloadHandler()
-
+    # Use the global payload handler
+    global global_payload_handler
     try:
         while True:
             data = await reader.read(16384)
@@ -35,7 +70,9 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             insertions = []
 
             for raw_msg, _ in message_pairs:
-                should_forward, msg_insertions = await payload_handler.process_messages(raw_msg, source_ip, target_ip)
+                # Always use the latest handler
+                handler = global_payload_handler
+                should_forward, msg_insertions = await handler.process_messages(raw_msg, source_ip, target_ip)
                 insertions.extend(msg_insertions)
 
                 if not should_forward:
@@ -147,11 +184,22 @@ async def start_proxy(src_host: str, src_port: int) -> None:
 def main():
     config_path = "config/config.yaml"
 
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    # Initial config load
+    initial_config = load_config(config_path)
+    with config_lock:
+        global_config.clear()
+        global_config.update(initial_config)
+    update_payload_handler()
 
-    src_config = config.get("src", {})
+    # Start watchdog observer in a separate thread
+    event_handler = ConfigReloader(config_path)
+    observer = Observer()
+    observer.schedule(event_handler, path="config/", recursive=False)
+    observer.daemon = True
+    observer.start()
+    print(f"[*] Watching {config_path} for changes...")
 
+    src_config = global_config.get("src", {})
     src_host = src_config.get("host", "0.0.0.0")
     src_port = src_config.get("port", 8000)
 
@@ -161,6 +209,9 @@ def main():
         print("\n[*] Shutting down from keyboard interrupt...")
     except Exception as e:
         print(f"[!] Error: {e}")
+    finally:
+        observer.stop()
+        observer.join()
 
 
 if __name__ == '__main__':
