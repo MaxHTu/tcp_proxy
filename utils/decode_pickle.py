@@ -36,7 +36,7 @@ class PickleDecoder:
 
         return messages
 
-    def add_data_with_raw(self, data: bytes) -> List[Tuple[Any, str]]:
+    def add_data_with_raw(self, data: bytes) -> List[Tuple[Any, str, int]]:
         # print(f"[DEBUG] add_data received {len(data) if data else 0} bytes")
         if not data:
             # print("[DEBUG] No data received, returning empty list")
@@ -52,7 +52,7 @@ class PickleDecoder:
                 del self.buffer[:4 + msg_len]
                 decoded_msg = self.decode_message(payload)
                 formatted_output = PickleDecoder.format_message(decoded_msg)
-                messages.append((decoded_msg, formatted_output))
+                messages.append((decoded_msg, formatted_output, msg_len))
             else:
                 break
 

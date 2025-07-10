@@ -49,7 +49,8 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
     decoder = PickleDecoder()
     # Use the global payload handler
     global global_payload_handler
-    decoded_messages = []
+    decoded_messages = {}
+    message_counter = 1
     try:
         while True:
             data = await reader.read(16384)
@@ -64,18 +65,20 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
             if message_pairs:
                 print(f"[{direction}] Decoded {len(message_pairs)} message(s):")
-                for i, (raw_msg, formatted_msg) in enumerate(message_pairs, 1):
-                    print(f"[{direction}] Message {i}:")
+                for _, (raw_msg, formatted_msg, msg_len) in enumerate(message_pairs, 1):
+                    print(f"[{direction}] Message {message_counter}:")
                     print(f"{formatted_msg}")
-                    # Store the raw decoded message for JSON output
-                    decoded_messages.append(raw_msg)
+                    # Store the raw decoded message for JSON output with message number and length
+                    key = f"Message {message_counter}, Length {msg_len}"
+                    decoded_messages[key] = raw_msg
+                    message_counter += 1
             else:
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
 
             should_forward = True
             insertions = []
 
-            for raw_msg, _ in message_pairs:
+            for raw_msg, _, _ in message_pairs:
                 # Always use the latest handler
                 handler = global_payload_handler
                 should_forward, msg_insertions = await handler.process_messages(raw_msg, source_ip, target_ip)
