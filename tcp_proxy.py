@@ -68,9 +68,9 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                 for _, (raw_msg, formatted_msg, msg_len) in enumerate(message_pairs, 1):
                     print(f"[{direction}] Message {message_counter}:")
                     print(f"{formatted_msg}")
-                    # Store the raw decoded message for JSON output with message number and length
+                    # Store the formatted-for-JSON decoded message for JSON output
                     key = f"Message {message_counter}, Length {msg_len}"
-                    decoded_messages[key] = raw_msg
+                    decoded_messages[key] = PickleDecoder.format_for_json(raw_msg)
                     message_counter += 1
             else:
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")

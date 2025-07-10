@@ -154,3 +154,37 @@ class PickleDecoder:
         if arr.size > 6:
             return f"array([{', '.join(map(str, arr[:3]))}, ..., {', '.join(map(str, arr[-3:]))}], dtype={arr.dtype})"
         return f"array({arr.tolist()}, dtype={arr.dtype})"
+
+    @staticmethod
+    def format_for_json(obj: Any):
+        import numpy as np
+        import re
+        if isinstance(obj, dict):
+            return {k: PickleDecoder.format_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [PickleDecoder.format_for_json(v) for v in obj]
+        elif isinstance(obj, np.ndarray):
+            return PickleDecoder.format_numpy_array(obj)
+        elif isinstance(obj, str):
+            # Try to parse string as numpy array and format it
+            s_clean = re.sub(r'\s+', ' ', obj.replace('\n', ' ').replace('\r', ' ')).strip()
+            arr_match = re.match(r"^\[([\d\s\-eE\.]+)\]$", s_clean)
+            if arr_match:
+                try:
+                    nums = [float(x) if '.' in x or 'e' in x or 'E' in x else int(x) for x in arr_match.group(1).split()]
+                    arr = np.array(nums)
+                    return PickleDecoder.format_numpy_array(arr)
+                except Exception:
+                    pass
+            arr_dtype_match = re.match(r"^\[([\d\s\-eE\.]+)\]\s*,?\s*dtype=([a-zA-Z0-9_]+)?\)?$", s_clean)
+            if arr_dtype_match:
+                try:
+                    nums = [float(x) if '.' in x or 'e' in x or 'E' in x else int(x) for x in arr_dtype_match.group(1).split()]
+                    dtype = arr_dtype_match.group(2) or 'int'
+                    arr = np.array(nums, dtype=dtype)
+                    return PickleDecoder.format_numpy_array(arr)
+                except Exception:
+                    pass
+            return obj
+        else:
+            return obj
