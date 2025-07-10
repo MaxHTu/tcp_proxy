@@ -102,16 +102,16 @@ class PickleDecoder:
     def format_message(msg: Any) -> str:
         def truncate_array_string(s):
             import re
-            # Remove newlines and extra spaces
-            s_clean = re.sub(r'\s+', ' ', s.strip().replace('\n', ' '))
-            # Match e.g. '[1 2 3 ... 4 5 6]' or '[1 2 3 4 5 6]'
+            # Remove all newlines and compress spaces
+            s_clean = re.sub(r'\s+', ' ', s.replace('\n', ' ').replace('\r', ' ')).strip()
+            # Match any string that starts with [ and ends with ]
             arr_match = re.match(r"^\[([\d\s\-eE\.]+)\]$", s_clean)
             if arr_match:
                 nums = arr_match.group(1).split()
                 if len(nums) > 6:
-                    return f"array([{', '.join(nums[:3])}, ..., {', '.join(nums[-3:])}])"
+                    return f"array([{', '.join(nums[:3])}, ..., {', '.join(nums[-3:])}], dtype=int)"
                 else:
-                    return f"array([{', '.join(nums)}])"
+                    return f"array([{', '.join(nums)}], dtype=int)"
             # Also match numpy's array2string with dtype at the end
             arr_dtype_match = re.match(r"^\[([\d\s\-eE\.]+)\]\s*,?\s*dtype=([a-zA-Z0-9_]+)?\)?$", s_clean)
             if arr_dtype_match:
