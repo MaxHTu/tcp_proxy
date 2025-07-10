@@ -44,6 +44,7 @@ class PickleDecoder:
 
         self.buffer.extend(data)
         messages = []
+        msg_count = 1
 
         while len(self.buffer) > 4:
             msg_len = struct.unpack('>I', self.buffer[:4])[0]
@@ -52,7 +53,9 @@ class PickleDecoder:
                 del self.buffer[:4 + msg_len]
                 decoded_msg = self.decode_message(payload)
                 formatted_output = PickleDecoder.format_message(decoded_msg)
-                messages.append((decoded_msg, formatted_output))
+                label = f"Message {msg_count}, Length {msg_len}"
+                messages.append(((label, decoded_msg), formatted_output))
+                msg_count += 1
             else:
                 break
 

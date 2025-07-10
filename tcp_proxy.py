@@ -8,6 +8,9 @@ from utils.payload_handling import PayloadHandler
 import threading
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+import os
+import json
+from datetime import datetime
 
 # Shared config object
 global_config = {}
@@ -42,10 +45,11 @@ class ConfigReloader(FileSystemEventHandler):
                 print(f"[!] Failed to reload config: {e}")
 
 
-async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str, source_ip: str, target_ip: str) -> None:
+async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str, source_ip: str, target_ip: str, json_filename: str = None) -> None:
     decoder = PickleDecoder()
     # Use the global payload handler
     global global_payload_handler
+    decoded_messages = []
     try:
         while True:
             data = await reader.read(16384)
@@ -60,16 +64,20 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
             if message_pairs:
                 print(f"[{direction}] Decoded {len(message_pairs)} message(s):")
-                for i, (_, formatted_msg) in enumerate(message_pairs, 1):
-                    print(f"[{direction}] Message {i}:")
+                for i, (label_and_msg, formatted_msg) in enumerate(message_pairs, 1):
+                    label, raw_msg = label_and_msg
+                    print(f"[{direction}] {label}:")
                     print(f"{formatted_msg}")
+                    # Store the (label, decoded message) tuple for JSON output
+                    decoded_messages.append([label, raw_msg])
             else:
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
 
             should_forward = True
             insertions = []
 
-            for raw_msg, _ in message_pairs:
+            for label_and_msg, _ in message_pairs:
+                label, raw_msg = label_and_msg
                 # Always use the latest handler
                 handler = global_payload_handler
                 should_forward, msg_insertions = await handler.process_messages(raw_msg, source_ip, target_ip)
@@ -99,6 +107,14 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
         # import traceback
         # traceback.print_exc()
     finally:
+        # Write all decoded messages to JSON file if filename is provided
+        if json_filename is not None:
+            try:
+                os.makedirs(os.path.dirname(json_filename), exist_ok=True)
+                with open(json_filename, 'w') as f:
+                    json.dump(decoded_messages, f, indent=2, default=str)
+            except Exception as e:
+                print(f"[!] Failed to write decoded output to {json_filename}: {e}")
         writer.close()
         await writer.wait_closed()
 
@@ -117,6 +133,12 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         orig_dst_ip, orig_dst_port = get_original_dest(sock)
         client_ip, client_port = client_addr
         print(f"[*] TPROXY connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
+        # Generate a unique filename for decoded output
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        base_dir = "decoded_output"
+        # For both directions, use a different file
+        client_to_remote_file = os.path.join(base_dir, f"decoded_{client_ip}_{client_port}_{orig_dst_ip}_{orig_dst_port}_to_{timestamp}.json")
+        remote_to_client_file = os.path.join(base_dir, f"decoded_{orig_dst_ip}_{orig_dst_port}_{client_ip}_{client_port}_from_{timestamp}.json")
     except Exception as e:
          print(f"[!] Error getting socket names: {e}")
          src_writer.close()
@@ -144,8 +166,9 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         remote_reader, remote_writer = await asyncio.open_connection(sock=remote_socket)
         print(f"[*] Connected to original destination {orig_dst_ip}:{orig_dst_port}")
 
-        client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}", client_ip, orig_dst_ip))
-        remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}", orig_dst_ip, client_ip))
+        # Pass the unique JSON filenames to forward_data
+        client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}", client_ip, orig_dst_ip, client_to_remote_file))
+        remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}", orig_dst_ip, client_ip, remote_to_client_file))
 
         await asyncio.gather(client_to_remote, remote_to_client)
 
