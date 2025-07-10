@@ -100,6 +100,19 @@ class PickleDecoder:
 
     @staticmethod
     def format_message(msg: Any) -> str:
+        def truncate_array_string(s):
+            # Try to match numpy array string output and truncate
+            import re
+            # Match e.g. '[1 2 3 ... 4 5 6]' or '[1 2 3 4 5 6]'
+            arr_match = re.match(r"^\[([\d\s\-eE\.]+)\]$", s.strip())
+            if arr_match:
+                nums = arr_match.group(1).split()
+                if len(nums) > 6:
+                    return f"array([{', '.join(nums[:3])}, ..., {', '.join(nums[-3:])}])"
+                else:
+                    return f"array([{', '.join(nums)}])"
+            return s
+
         if isinstance(msg, dict):
             formatted_dict = {}
             for k, v in msg.items():
@@ -110,14 +123,20 @@ class PickleDecoder:
                     for nk, nv in v.items():
                         if isinstance(nv, np.ndarray):
                             nested_dict[nk] = PickleDecoder.format_numpy_array(nv)
+                        elif isinstance(nv, str):
+                            nested_dict[nk] = truncate_array_string(nv)
                         else:
                             nested_dict[nk] = nv
                     formatted_dict[k] = nested_dict
+                elif isinstance(v, str):
+                    formatted_dict[k] = truncate_array_string(v)
                 else:
                     formatted_dict[k] = v
             return json.dumps(formatted_dict, indent=2)
         elif isinstance(msg, np.ndarray):
             return PickleDecoder.format_numpy_array(msg)
+        elif isinstance(msg, str):
+            return truncate_array_string(msg)
         return str(msg)
 
     @staticmethod
