@@ -101,16 +101,26 @@ class PickleDecoder:
     @staticmethod
     def format_message(msg: Any) -> str:
         def truncate_array_string(s):
-            # Try to match numpy array string output and truncate
             import re
+            # Remove newlines and extra spaces
+            s_clean = re.sub(r'\s+', ' ', s.strip().replace('\n', ' '))
             # Match e.g. '[1 2 3 ... 4 5 6]' or '[1 2 3 4 5 6]'
-            arr_match = re.match(r"^\[([\d\s\-eE\.]+)\]$", s.strip())
+            arr_match = re.match(r"^\[([\d\s\-eE\.]+)\]$", s_clean)
             if arr_match:
                 nums = arr_match.group(1).split()
                 if len(nums) > 6:
                     return f"array([{', '.join(nums[:3])}, ..., {', '.join(nums[-3:])}])"
                 else:
                     return f"array([{', '.join(nums)}])"
+            # Also match numpy's array2string with dtype at the end
+            arr_dtype_match = re.match(r"^\[([\d\s\-eE\.]+)\]\s*,?\s*dtype=([a-zA-Z0-9_]+)?\)?$", s_clean)
+            if arr_dtype_match:
+                nums = arr_dtype_match.group(1).split()
+                dtype = arr_dtype_match.group(2) or 'int'
+                if len(nums) > 6:
+                    return f"array([{', '.join(nums[:3])}, ..., {', '.join(nums[-3:])}], dtype={dtype})"
+                else:
+                    return f"array([{', '.join(nums)}], dtype={dtype})"
             return s
 
         if isinstance(msg, dict):

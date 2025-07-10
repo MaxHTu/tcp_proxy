@@ -134,12 +134,12 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         orig_dst_ip, orig_dst_port = get_original_dest(sock)
         client_ip, client_port = client_addr
         print(f"[*] TPROXY connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
-        # Generate a unique filename for decoded output
+        # Generate a unique, human-readable filename for decoded output
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         base_dir = "decoded_output"
-        # For both directions, use a different file
-        client_to_remote_file = os.path.join(base_dir, f"decoded_{client_ip}_{client_port}_{orig_dst_ip}_{orig_dst_port}_to_{timestamp}.json")
-        remote_to_client_file = os.path.join(base_dir, f"decoded_{orig_dst_ip}_{orig_dst_port}_{client_ip}_{client_port}_from_{timestamp}.json")
+        # Use dashes for IP/port, and _to_ for direction
+        client_to_remote_file = os.path.join(base_dir, f"decoded_{client_ip}-{client_port}_to_{orig_dst_ip}-{orig_dst_port}_{timestamp}.json")
+        remote_to_client_file = os.path.join(base_dir, f"decoded_{orig_dst_ip}-{orig_dst_port}_to_{client_ip}-{client_port}_{timestamp}.json")
     except Exception as e:
          print(f"[!] Error getting socket names: {e}")
          src_writer.close()
