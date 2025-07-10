@@ -156,35 +156,46 @@ class PickleDecoder:
         return f"array({arr.tolist()}, dtype={arr.dtype})"
 
     @staticmethod
-    def format_for_json(obj: Any):
+    def format_for_json(obj: Any, _debug_path=None):
         import numpy as np
         import re
+        if _debug_path is None:
+            _debug_path = []
+        # Print the path, type, and value (truncated for long values)
+        path_str = '.'.join(map(str, _debug_path))
         if isinstance(obj, dict):
-            return {k: PickleDecoder.format_for_json(v) for k, v in obj.items()}
+            for k, v in obj.items():
+                print(f"[DEBUG] Processing key: {path_str + '.' if path_str else ''}{k}, type: {type(v)}, value: {str(v)[:80]}")
+            return {k: PickleDecoder.format_for_json(v, _debug_path + [k]) for k, v in obj.items()}
         elif isinstance(obj, list):
-            return [PickleDecoder.format_for_json(v) for v in obj]
+            for idx, v in enumerate(obj):
+                print(f"[DEBUG] Processing list index: {path_str}[{idx}], type: {type(v)}, value: {str(v)[:80]}")
+            return [PickleDecoder.format_for_json(v, _debug_path + [idx]) for idx, v in enumerate(obj)]
         elif isinstance(obj, np.ndarray):
+            print(f"[DEBUG] Processing numpy array at {path_str}, shape: {obj.shape}, dtype: {obj.dtype}")
             return PickleDecoder.format_numpy_array(obj)
         elif isinstance(obj, str):
-            # Try to parse string as numpy array and format it
             s_clean = re.sub(r'\s+', ' ', obj.replace('\n', ' ').replace('\r', ' ')).strip()
             arr_match = re.match(r"^\[([\d\s\-eE\.]+)\]$", s_clean)
             if arr_match:
                 try:
                     nums = [float(x) if '.' in x or 'e' in x or 'E' in x else int(x) for x in arr_match.group(1).split()]
                     arr = np.array(nums)
+                    print(f"[DEBUG] String at {path_str} looks like array, parsed as numpy array, len={len(nums)}")
                     return PickleDecoder.format_numpy_array(arr)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[DEBUG] String at {path_str} looks like array but failed to parse: {e}")
             arr_dtype_match = re.match(r"^\[([\d\s\-eE\.]+)\]\s*,?\s*dtype=([a-zA-Z0-9_]+)?\)?$", s_clean)
             if arr_dtype_match:
                 try:
                     nums = [float(x) if '.' in x or 'e' in x or 'E' in x else int(x) for x in arr_dtype_match.group(1).split()]
                     dtype = arr_dtype_match.group(2) or 'int'
                     arr = np.array(nums, dtype=dtype)
+                    print(f"[DEBUG] String at {path_str} looks like array with dtype, parsed as numpy array, len={len(nums)}, dtype={dtype}")
                     return PickleDecoder.format_numpy_array(arr)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[DEBUG] String at {path_str} looks like array with dtype but failed to parse: {e}")
             return obj
         else:
+            print(f"[DEBUG] Processing {type(obj)} at {path_str}, value: {str(obj)[:80]}")
             return obj
