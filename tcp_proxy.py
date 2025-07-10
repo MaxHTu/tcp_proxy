@@ -64,20 +64,18 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
             if message_pairs:
                 print(f"[{direction}] Decoded {len(message_pairs)} message(s):")
-                for i, (label_and_msg, formatted_msg) in enumerate(message_pairs, 1):
-                    label, raw_msg = label_and_msg
-                    print(f"[{direction}] {label}:")
+                for i, (raw_msg, formatted_msg) in enumerate(message_pairs, 1):
+                    print(f"[{direction}] Message {i}:")
                     print(f"{formatted_msg}")
-                    # Store the (label, decoded message) tuple for JSON output
-                    decoded_messages.append([label, raw_msg])
+                    # Store the raw decoded message for JSON output
+                    decoded_messages.append(raw_msg)
             else:
                 print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
 
             should_forward = True
             insertions = []
 
-            for label_and_msg, _ in message_pairs:
-                label, raw_msg = label_and_msg
+            for raw_msg, _ in message_pairs:
                 # Always use the latest handler
                 handler = global_payload_handler
                 should_forward, msg_insertions = await handler.process_messages(raw_msg, source_ip, target_ip)
