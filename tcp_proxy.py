@@ -54,6 +54,10 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                 print(f"[{direction}] Message blocked by rules")
     except Exception as e:
         print(f"[!] Error forwarding data ({direction}): {e}")
+        # Don't print full traceback for expected connection resets
+        if "Connection reset by peer" not in str(e) and "Broken pipe" not in str(e):
+            import traceback
+            traceback.print_exc()
     finally:
         writer.close()
         await writer.wait_closed()
