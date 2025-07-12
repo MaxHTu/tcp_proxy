@@ -4,10 +4,34 @@ import uvloop
 import socket
 import struct
 import binascii
+import logging
+import os
+from datetime import datetime
 from utils.decode_pickle import PickleDecoder
 from utils.payload_handling import PayloadHandler
 from utils.mitm_attack_handler import MitmAttackHandler
 
+# Setup logging
+def setup_logging():
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
+
+    # Create a unique log filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"logs/tcp_proxy_{timestamp}.log"
+
+    # Configure logging to write to both file and console
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_filename),
+            logging.StreamHandler()
+        ]
+    )
+
+    print(f"[*] Logging to file: {log_filename}")
+    return log_filename
 
 async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str, source_ip: str, target_ip: str) -> None:
     decoder = PickleDecoder()
@@ -21,13 +45,20 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                 break
             original_data = data
             message_pairs = decoder.add_data_with_raw(data)
+
             if message_pairs:
-                print(f"[{direction}] Decoded {len(message_pairs)} message(s):")
+                logging.info(f"[{direction}] Decoded {len(message_pairs)} message(s):")
                 for i, (_, formatted_msg) in enumerate(message_pairs, 1):
-                    print(f"[{direction}] Message {i}:")
-                    print(f"{formatted_msg}")
+                    logging.info(f"[{direction}] Message {i}:")
+                    logging.info(f"{formatted_msg}")
+                    # Add hex dump for debugging
+                    if direction_name and payload_handler.should_log_attack(direction_name):
+                        logging.info(f"[{direction}] Raw data hex: {data[:100].hex()}")
             else:
-                print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
+                logging.info(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
+                # Add hex dump for debugging even when no messages decoded
+                if direction_name and payload_handler.should_log_attack(direction_name):
+                    logging.info(f"[{direction}] Raw data hex: {data[:100].hex()}")
             should_forward = True
             insertions = []
             for raw_msg, _ in message_pairs:
@@ -51,13 +82,13 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                         writer.write(insert_data)
                         await writer.drain()
             else:
-                print(f"[{direction}] Message blocked by rules")
+                logging.info(f"[{direction}] Message blocked by rules")
     except Exception as e:
-        print(f"[!] Error forwarding data ({direction}): {e}")
+        logging.error(f"Error forwarding data ({direction}): {e}")
         # Don't print full traceback for expected connection resets
         if "Connection reset by peer" not in str(e) and "Broken pipe" not in str(e):
             import traceback
-            traceback.print_exc()
+            logging.error(traceback.format_exc())
     finally:
         writer.close()
         await writer.wait_closed()
@@ -76,12 +107,12 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
     try:
         orig_dst_ip, orig_dst_port = get_original_dest(sock)
         client_ip, client_port = client_addr
-        print(f"[*] TPROXY connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
+        logging.info(f"TPROXY connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
     except Exception as e:
-         print(f"[!] Error getting socket names: {e}")
-         src_writer.close()
-         await src_writer.wait_closed()
-         return
+        logging.error(f"Error getting socket names: {e}")
+        src_writer.close()
+        await src_writer.wait_closed()
+        return
     try:
         remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         remote_socket.setblocking(False)
@@ -90,9 +121,9 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         try:
             remote_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             remote_socket.bind((client_ip, client_port))
-            print(f"[*] Outgoing socket bound to {client_ip}:{client_port}")
+            logging.info(f"Outgoing socket bound to {client_ip}:{client_port}")
         except Exception as e:
-            print(f"[!] Warning: Could not bind outgoing socket to {client_ip}:{client_port} (requires CAP_NET_ADMIN or root): {e}. Proceeding with default source.")
+            logging.warning(f"Could not bind outgoing socket to {client_ip}:{client_port} (requires CAP_NET_ADMIN or root): {e}. Proceeding with default source.")
             src_writer.close()
             await src_writer.wait_closed()
             return
@@ -102,7 +133,7 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         await loop.sock_connect(remote_socket, (orig_dst_ip, orig_dst_port))
 
         remote_reader, remote_writer = await asyncio.open_connection(sock=remote_socket)
-        print(f"[*] Connected to original destination {orig_dst_ip}:{orig_dst_port}")
+        logging.info(f"Connected to original destination {orig_dst_ip}:{orig_dst_port}")
 
         client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}", client_ip, orig_dst_ip))
         remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}", orig_dst_ip, client_ip))
@@ -110,15 +141,15 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         await asyncio.gather(client_to_remote, remote_to_client)
 
     except ConnectionRefusedError:
-        print(f"[!] Connection refused by {orig_dst_ip}:{orig_dst_port}")
+        logging.error(f"Connection refused by {orig_dst_ip}:{orig_dst_port}")
     except Exception as e:
-        print(f"[!] Error in handle_connection: {e}")
+        logging.error(f"Error in handle_connection: {e}")
         #  import traceback
         # traceback.print_exc()
     finally:
         src_writer.close()
         await src_writer.wait_closed()
-    print(f"[*] Connection from {client_addr[0]}:{client_addr[1]} closed")
+    logging.info(f"Connection from {client_addr[0]}:{client_addr[1]} closed")
 
 async def start_proxy(src_host: str, src_port: int) -> None:
     listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -132,13 +163,13 @@ async def start_proxy(src_host: str, src_port: int) -> None:
     server = await asyncio.start_server(handle_connection, sock=listening_socket)
 
     addr = server.sockets[0].getsockname()
-    print(f"[*] Listening on {addr[0]}:{addr[1]} (transparent)")
+    logging.info(f"Listening on {addr[0]}:{addr[1]} (transparent)")
 
     try:
         async with server:
             await server.serve_forever()
     except asyncio.CancelledError:
-        print("[*] Server cancelled.")
+        logging.info("Server cancelled.")
         raise
 
 def main():
@@ -152,12 +183,18 @@ def main():
     src_host = src_config.get("host", "0.0.0.0")
     src_port = src_config.get("port", 8000)
 
+    # Setup logging
+    log_filename = setup_logging()
+    logging.info("Starting TCP proxy with MITM attack capabilities")
+
     try:
         uvloop.run(start_proxy(src_host, src_port))
     except KeyboardInterrupt:
-        print("\n[*] Shutting down from keyboard interrupt...")
+        logging.info("Shutting down from keyboard interrupt...")
     except Exception as e:
-        print(f"[!] Error: {e}")
+        logging.error(f"Error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
 
 
 if __name__ == '__main__':
