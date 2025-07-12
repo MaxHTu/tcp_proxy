@@ -28,18 +28,18 @@ class PayloadHandler:
             if isinstance(rule, dict) and "action" in rule and "delay_ms" in rule:
                 action = rule["action"]
                 delay_ms = rule.get("delay_ms", 0)
-                # Convert to int and handle None/empty string
+                # Robustly handle None, empty string, missing, or invalid delay_ms
                 try:
                     if delay_ms is None or delay_ms == "":
                         delay_ms = 0
                     else:
                         delay_ms = int(delay_ms)
-                    if delay_ms > 0:
-                        delay_rules[action] = delay_ms
-                    else:
-                        print(f"[!] Warning: Delay rule for action '{action}' has non-positive delay_ms ({delay_ms}). Ignoring.")
                 except (ValueError, TypeError):
-                    print(f"[!] Warning: Invalid delay_ms value '{delay_ms}' for action '{action}'. Ignoring.")
+                    delay_ms = 0
+                if delay_ms > 0:
+                    delay_rules[action] = delay_ms
+                else:
+                    print(f"[!] Warning: Delay rule for action '{action}' has non-positive or invalid delay_ms ({delay_ms}). Ignoring.")
 
         block_rules = set()
         for rule in global_rules.get("block", []):
@@ -67,18 +67,18 @@ class PayloadHandler:
                 if isinstance(rule, dict) and "action" in rule and "delay_ms" in rule:
                     action = rule["action"]
                     delay_ms = rule.get("delay_ms", 0)
-                    # Convert to int and handle None/empty string
+                    # Robustly handle None, empty string, missing, or invalid delay_ms
                     try:
                         if delay_ms is None or delay_ms == "":
                             delay_ms = 0
                         else:
                             delay_ms = int(delay_ms)
-                        if delay_ms > 0:
-                            delay_rules[action] = delay_ms
-                        else:
-                            print(f"[!] Warning: Direction '{direction_name}' delay rule for action '{action}' has non‑positive delay_ms ({delay_ms}). Ignoring.")
                     except (ValueError, TypeError):
-                        print(f"[!] Warning: Invalid delay_ms value '{delay_ms}' for action '{action}' in direction '{direction_name}'. Ignoring.")
+                        delay_ms = 0
+                    if delay_ms > 0:
+                        delay_rules[action] = delay_ms
+                    else:
+                        print(f"[!] Warning: Direction '{direction_name}' delay rule for action '{action}' has non-positive or invalid delay_ms ({delay_ms}). Ignoring.")
 
             block_rules = set()
             for rule in direction_config.get("block", []):
