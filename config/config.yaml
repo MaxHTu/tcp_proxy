@@ -4,50 +4,24 @@ src:
 
 payload_handling:
   global:
-    delay:
-      - action: ""
-        delay_ms: 0
-    block:
-      - action: ""
-    insert:
-      - action: ""
-        position: "before"
-        data: "deadbeef"
-        repeat: 1
+    delay: []
+    block: []
+    insert: []
 
   directions:
     alice_to_bob:
       source_ip: "10.10.20.11"
       target_ip: "10.10.20.13"
-      delay:
-        - action: ""
-          delay_ms: 0
-      block:
-        - action: ""
-      insert:
-        - action: "u"
-          position: "after"
-          data: "deadbeef"
-          repeat: 3
-        - action: ""
-          position: "before"
-          data: "deadbeef"
-          delay_ms: 100
-          repeat: true
+      delay: []
+      block: []
+      insert: []
 
     bob_to_alice:
       source_ip: "10.10.20.13"
       target_ip: "10.10.20.11"
-      delay:
-        - action: ""
-          delay_ms: 0
-      block:
-        - action: ""
-      insert:
-        - action: ""
-          position: "before"
-          data: "deadbeef"
-          repeat: false
+      delay: []
+      block: []
+      insert: []
 
 attack_mode:
   alice_to_bob:
