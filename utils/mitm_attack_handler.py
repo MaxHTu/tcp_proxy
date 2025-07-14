@@ -92,13 +92,23 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] Challenge content: {raw_msg}")
                     logging.info(f"[MITM] Original data length: {len(original_data)} bytes")
                 # Instead of forwarding Bob's challenge, send our own malicious challenge
-                try:
-                    malicious_bytes = binascii.unhexlify(self.attack_payload_hex)
+                malicious_bytes = b''
+                if self.attack_payload_hex:
+                    try:
+                        # Ensure hex string has even length
+                        hex_str = self.attack_payload_hex.strip()
+                        if len(hex_str) % 2 != 0:
+                            hex_str = hex_str + '0'  # Pad with zero if odd length
+                        malicious_bytes = binascii.unhexlify(hex_str)
+                        if self.attack_log:
+                            logging.info(f"[MITM] Sending malicious payload: {self.hex_dump(malicious_bytes)}")
+                    except Exception as e:
+                        logging.error(f"[MITM] Error decoding malicious payload: {e}")
+                        logging.error(f"[MITM] Hex string was: {self.attack_payload_hex}")
+                        malicious_bytes = b''
+                else:
                     if self.attack_log:
-                        logging.info(f"[MITM] Sending malicious payload: {self.hex_dump(malicious_bytes)}")
-                except Exception as e:
-                    logging.error(f"[MITM] Error decoding malicious payload: {e}")
-                    malicious_bytes = b''
+                        logging.warning("[MITM] No malicious payload configured, sending empty payload")
                 writer.write(malicious_bytes)
                 await writer.drain()
                 if self.attack_log:
