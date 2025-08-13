@@ -26,9 +26,9 @@ payload_handling:
 attack_mode:
   alice_to_bob:
     enabled: true
-    malicious_pickle_payload: "800495abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+    malicious_pickle_payload: ""
     log: true
   bob_to_alice:
-    enabled: false
-    malicious_pickle_payload: ""
+    enabled: true
+    malicious_pickle_payload: "800495abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
     log: true

