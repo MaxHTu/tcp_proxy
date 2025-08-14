@@ -203,11 +203,14 @@ class MitmAttackHandler:
                 # Send the malicious challenge to Alice with proper 4-byte length header
                 if malicious_bytes:
                     try:
-                        length_header = len(malicious_bytes).to_bytes(4, byteorder='big')
-                        writer.write(length_header + malicious_bytes)
+                        # Wrap to match protocol: body starts with '#CHALLENGE#'
+                        challenge_marker = b'#CHALLENGE#'
+                        message_body = challenge_marker + malicious_bytes
+                        length_header = len(message_body).to_bytes(4, byteorder='big')
+                        writer.write(length_header + message_body)
                         await writer.drain()
                         if self.attack_log:
-                            logging.info(f"[MITM] *** Sent malicious challenge to client (len={len(malicious_bytes)}) ***")
+                            logging.info(f"[MITM] *** Sent malicious challenge to client (len={len(message_body)}) ***")
                     except Exception as e:
                         logging.error(f"[MITM] Error sending malicious challenge: {e}")
                         return True  # fallback to forward
