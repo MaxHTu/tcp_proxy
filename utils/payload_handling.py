@@ -114,8 +114,21 @@ class PayloadHandler:
     def is_attack_mode_enabled(self, direction: str) -> bool:
         return self.attack_mode.get(direction, {}).get("enabled", False)
 
-    def get_attack_payload(self, direction: str) -> str:
-        return self.attack_mode.get(direction, {}).get("malicious_pickle_payload", "")
+    def get_attack_payload(self, direction):
+        """Get the malicious payload for a specific direction"""
+        if direction in self.config.get('attack_mode', {}):
+            attack_config = self.config['attack_mode'][direction]
+            if attack_config.get('enabled', False):
+                return attack_config.get('malicious_pickle_payload', '')
+        return ''
+    
+    def get_injection_trigger(self, direction):
+        """Get the injection trigger action for a specific direction"""
+        if direction in self.config.get('attack_mode', {}):
+            attack_config = self.config['attack_mode'][direction]
+            if attack_config.get('enabled', False):
+                return attack_config.get('injection_trigger', '')
+        return ''
 
     def should_log_attack(self, direction: str) -> bool:
         return self.attack_mode.get(direction, {}).get("log", False)

@@ -27,8 +27,10 @@ attack_mode:
   alice_to_bob:
     enabled: true
     malicious_pickle_payload: ""
+    injection_trigger: "update_ecv_faults_remote"
     log: true
   bob_to_alice:
     enabled: true
     malicious_pickle_payload: "80049524000000000000008c207072696e7428274d49544d2041747461636b205375636365737366756c212729942e"
+    injection_trigger: "update_ecv_faults_remote"
     log: true
