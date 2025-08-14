@@ -200,11 +200,21 @@ class MitmAttackHandler:
                     if self.attack_log:
                         logging.warning(f"[MITM] No malicious payload configured for bob_to_alice direction")
                 
-                # Send the malicious challenge to Alice
-                writer.write(malicious_bytes)
-                await writer.drain()
-                if self.attack_log:
-                    logging.info(f"[MITM] *** Sent malicious challenge to client ***")
+                # Send the malicious challenge to Alice with proper 4-byte length header
+                if malicious_bytes:
+                    try:
+                        length_header = len(malicious_bytes).to_bytes(4, byteorder='big')
+                        writer.write(length_header + malicious_bytes)
+                        await writer.drain()
+                        if self.attack_log:
+                            logging.info(f"[MITM] *** Sent malicious challenge to client (len={len(malicious_bytes)}) ***")
+                    except Exception as e:
+                        logging.error(f"[MITM] Error sending malicious challenge: {e}")
+                        return True  # fallback to forward
+                else:
+                    if self.attack_log:
+                        logging.warning(f"[MITM] Malicious bytes empty, forwarding original challenge")
+                    return True
                 return False
             else:
                 # In alice_to_bob direction or already active, forward normally
