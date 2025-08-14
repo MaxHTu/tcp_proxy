@@ -239,6 +239,13 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
                     logging.info(f"[MITM] Forcing TCP RST on client direction only.")
                 
+                # Brief delay before reset to let the opposite side reach a clean state
+                try:
+                    import asyncio as _asyncio
+                    await _asyncio.sleep(0.4)
+                except Exception:
+                    pass
+                
                 # Signal that we need to reset only the current connection (client side)
                 # Return a special value to indicate RST needed on this writer only
                 return "RST_CONNECTION"
