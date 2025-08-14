@@ -78,6 +78,21 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                     writer.close()
                     return  # Exit the function to trigger connection reset
                 
+                elif mitm_result == "RST_ALL_CONNECTIONS":
+                    if direction_name and payload_handler.should_log_attack(direction_name):
+                        logging.info(f"[{direction}] MITM handler requested reset of ALL connections")
+                    # Force TCP RST by closing the writer abruptly
+                    try:
+                        sock = writer.get_extra_info('socket')
+                        if sock:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                    except:
+                        pass
+                    writer.close()
+                    # Also close the other direction's connection by raising an exception
+                    # This will cause both forward_data tasks to exit
+                    raise ConnectionResetError("MITM attack reset all connections")
+                
                 if mitm_result is False:
                     should_forward = False
                     break

