@@ -62,7 +62,7 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             should_forward = True
             insertions = []
             for raw_msg, _ in message_pairs:
-                mitm_result = await mitm_handler.process_message(raw_msg, original_data, writer)
+                mitm_result = await mitm_handler.process_message(raw_msg, original_data, writer, source_ip, target_ip)
                 
                 # Handle special MITM signals
                 if mitm_result == "RST_CONNECTION":

