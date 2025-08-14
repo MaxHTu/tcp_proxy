@@ -237,11 +237,11 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] *** HMAC DETECTED from client ***")
                     logging.info(f"[MITM] HMAC content: {str(raw_msg)[:100]}")
                     logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
-                    logging.info(f"[MITM] Forcing TCP RST on all connections.")
+                    logging.info(f"[MITM] Forcing TCP RST on client direction only.")
                 
-                # Signal that we need to reset ALL connections for a clean state
-                # Return a special value to indicate RST needed
-                return "RST_ALL_CONNECTIONS"
+                # Signal that we need to reset only the current connection (client side)
+                # Return a special value to indicate RST needed on this writer only
+                return "RST_CONNECTION"
                 
         # After reconnect, forward challenges normally until we see WELCOME
         elif (self.global_state.state['active'] and 
