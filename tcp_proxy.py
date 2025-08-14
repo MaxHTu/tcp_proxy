@@ -62,9 +62,26 @@ async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             should_forward = True
             insertions = []
             for raw_msg, _ in message_pairs:
-                should_forward = await mitm_handler.process_message(raw_msg, original_data, writer)
-                if not should_forward:
+                mitm_result = await mitm_handler.process_message(raw_msg, original_data, writer)
+                
+                # Handle special MITM signals
+                if mitm_result == "RST_CONNECTION":
+                    if direction_name and payload_handler.should_log_attack(direction_name):
+                        logging.info(f"[{direction}] MITM handler requested connection reset")
+                    # Force TCP RST by closing the writer abruptly
+                    try:
+                        sock = writer.get_extra_info('socket')
+                        if sock:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                    except:
+                        pass
+                    writer.close()
+                    return  # Exit the function to trigger connection reset
+                
+                if mitm_result is False:
+                    should_forward = False
                     break
+                    
                 should_forward2, msg_insertions = await payload_handler.process_messages(raw_msg, source_ip, target_ip)
                 insertions.extend(msg_insertions)
                 if not should_forward2:
