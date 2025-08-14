@@ -185,18 +185,30 @@ class MitmAttackHandler:
                 # Return a special value to indicate RST needed
                 return "RST_CONNECTION"
                 
-        # After reconnect, replay original challenge
+        # After reconnect, forward Bob's new challenge normally (don't replay old one)
         elif (self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'waiting_reconnect' and 
-              self.global_state.state['original_challenge']):
-            if self.attack_log:
-                logging.info(f"[MITM] *** Replaying original challenge after reconnect ***")
-            writer.write(self.global_state.state['original_challenge'])
-            await writer.drain()
-            self.global_state.state['phase'] = 'waiting_welcome'
-            if self.attack_log:
-                logging.info(f"[MITM] Replayed original challenge to client after reconnect.")
-            return False
+              isinstance(raw_msg, (bytes, str))):
+            # Check if this is a new challenge from Bob after reconnect
+            challenge_detected = False
+            if isinstance(raw_msg, str):
+                if raw_msg.startswith('#CHALLENGE#'):
+                    challenge_detected = True
+                elif '#CHALLENGE#' in raw_msg:
+                    challenge_detected = True
+            elif isinstance(raw_msg, bytes):
+                if b'#CHALLENGE#' in raw_msg:
+                    challenge_detected = True
+                    
+            if challenge_detected:
+                if self.attack_log:
+                    logging.info(f"[MITM] *** New challenge after reconnect, forwarding normally for authentication ***")
+                # Forward this challenge normally to let Alice authenticate
+                self.global_state.state['phase'] = 'waiting_welcome'
+                return True  # Forward the message
+            else:
+                # Not a challenge, continue waiting
+                return False
             
         # After handshake, inject malicious payload with captured HMAC
         elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_welcome':
