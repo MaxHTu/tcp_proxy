@@ -165,8 +165,8 @@ class MitmAttackHandler:
                 challenge_detected = True
                 
         if challenge_detected:
-            # Handle the first challenge we see (regardless of direction) to start the attack
-            if not self.global_state.state['active']:
+            # Only handle challenges in bob_to_alice direction (when Bob sends to Alice)
+            if correct_direction == 'bob_to_alice' and not self.global_state.state['active']:
                 self.global_state.state['active'] = True
                 self.global_state.state['phase'] = 'waiting_hmac'
                 self.global_state.state['original_challenge'] = original_data
@@ -207,9 +207,9 @@ class MitmAttackHandler:
                     logging.info(f"[MITM] *** Sent malicious challenge to client ***")
                 return False
             else:
-                # Already active, forward normally
+                # In alice_to_bob direction or already active, forward normally
                 if self.attack_log:
-                    logging.info(f"[MITM] Forwarding challenge normally (already active)")
+                    logging.info(f"[MITM] Forwarding challenge normally (direction: {correct_direction}, active: {self.global_state.state['active']})")
                 return True
                 
         # Detect HMAC from client (Alice) - this should be the response to our malicious challenge
