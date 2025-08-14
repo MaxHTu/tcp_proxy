@@ -161,8 +161,18 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
             return
 
         loop = asyncio.get_running_loop()
-
-        await loop.sock_connect(remote_socket, (orig_dst_ip, orig_dst_port))
+        # Retry connect briefly on ECONNREFUSED to allow remote to settle after resets
+        connect_attempts = [0.2, 0.4, 0.8]  # seconds
+        while True:
+            try:
+                await loop.sock_connect(remote_socket, (orig_dst_ip, orig_dst_port))
+                break
+            except ConnectionRefusedError:
+                if not connect_attempts:
+                    raise
+                delay = connect_attempts.pop(0)
+                logging.info(f"Connect to {orig_dst_ip}:{orig_dst_port} refused, retrying in {delay:.1f}s")
+                await asyncio.sleep(delay)
 
         remote_reader, remote_writer = await asyncio.open_connection(sock=remote_socket)
         logging.info(f"Connected to original destination {orig_dst_ip}:{orig_dst_port}")
