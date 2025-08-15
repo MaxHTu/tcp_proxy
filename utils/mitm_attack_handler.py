@@ -246,9 +246,9 @@ class MitmAttackHandler:
                 except Exception:
                     pass
                 
-                # Signal that we need to reset only the current connection (client side)
-                # Return a special value to indicate RST needed on this writer only
-                return "RST_CONNECTION"
+                # Signal that we need to reset both connections for a clean start
+                # Return a special value to indicate RST needed on all connections
+                return "RST_ALL_CONNECTIONS"
                 
         # After reconnect, forward challenges normally until we see WELCOME
         elif (self.global_state.state['active'] and 
