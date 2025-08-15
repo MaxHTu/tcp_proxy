@@ -4,6 +4,7 @@ from typing import Dict, Any, Tuple, Optional, List, Set
 from utils.delay_action import DelayAction
 from utils.block_action import BlockAction
 from utils.insert_action import InsertAction
+from utils.replay_action import ReplayAction
 
 class PayloadHandler:
     def __init__(self, config=None):
@@ -17,6 +18,7 @@ class PayloadHandler:
         self.global_delay_action = DelayAction(self.global_rules["delay"])
         self.global_block_action = BlockAction(self.global_rules["block"])
         self.global_insert_action = InsertAction(self.global_rules["insert"])
+        self.global_replay_action = ReplayAction(self.global_rules["replay"])
 
     def load_config(self, config_path: str):
         with open(config_path, "r") as f:
@@ -46,10 +48,16 @@ class PayloadHandler:
             if isinstance(rule, dict) and "action" in rule and "data" in rule:
                 insert_rules.append(rule)
 
+        replay_rules = []
+        for rule in global_rules.get("replay", []):
+            if isinstance(rule, dict) and "action" in rule and "count" in rule:
+                replay_rules.append(rule)
+
         return {
             "delay": delay_rules,
             "block": block_rules,
-            "insert": insert_rules
+            "insert": insert_rules,
+            "replay": replay_rules
         }
 
     def parse_direction_rules(self) -> Dict[str, Dict[str, Any]]:
@@ -77,12 +85,18 @@ class PayloadHandler:
                 if isinstance(rule, dict) and "action" in rule and "data" in rule:
                     insert_rules.append(rule)
 
+            replay_rules = []
+            for rule in direction_config.get("replay", []):
+                if isinstance(rule, dict) and "action" in rule and "count" in rule:
+                    replay_rules.append(rule)
+
             direction_rules[direction_name] = {
                 "source_ip": direction_config.get("source_ip"),
                 "target_ip": direction_config.get("target_ip"),
                 "delay": delay_rules,
                 "block": block_rules,
-                "insert": insert_rules
+                "insert": insert_rules,
+                "replay": replay_rules
             }
 
         return direction_rules
@@ -98,11 +112,22 @@ class PayloadHandler:
         if not isinstance(message, dict):
             return True, []
 
+        if self.global_replay_action.should_block_original(message):
+            print(f"[REPLAY] Blocking original message with action: {message.get('action')} due to active replay (global rule)")
+            return False, []
+
+        direction = self.get_matching_direction(source_ip, target_ip)
+        if direction:
+            direction_config = self.direction_rules[direction]
+            replay_action = ReplayAction(direction_config["replay"])
+            if replay_action.should_block_original(message):
+                print(f"[REPLAY] Blocking original message with action: {message.get('action')} due to active replay (direction: {direction})")
+                return False, []
+
         if self.global_block_action.should_block(message):
             print(f"[BLOCK] Blocking message with action: {message.get('action')} (global rule)")
             return False, []
 
-        direction = self.get_matching_direction(source_ip, target_ip)
         if direction:
             direction_config = self.direction_rules[direction]
             block_action = BlockAction(direction_config["block"])
@@ -121,7 +146,27 @@ class PayloadHandler:
             if delayed:
                 print(f"[DELAY] Delayed message with action: {message.get('action')} (direction: {direction})")
 
+        if self.global_replay_action.should_replay(message):
+            self.global_replay_action.start_replay(message.get('action'), message)
+            print(f"[REPLAY] Started global replay for action: {message.get('action')}")
+
+        if direction:
+            direction_config = self.direction_rules[direction]
+            replay_action = ReplayAction(direction_config["replay"])
+            if replay_action.should_replay(message):
+                replay_action.start_replay(message.get('action'), message)
+                print(f"[REPLAY] Started direction replay for action: {message.get('action')} (direction: {direction})")
+
         insertions = []
+        
+        global_replay_insertions = self.global_replay_action.get_replay_insertions(message)
+        insertions.extend(global_replay_insertions)
+        
+        if direction:
+            direction_config = self.direction_rules[direction]
+            replay_action = ReplayAction(direction_config["replay"])
+            direction_replay_insertions = replay_action.get_replay_insertions(message)
+            insertions.extend(direction_replay_insertions)
         
         global_insertions = await self.global_insert_action.get_insertions(message)
         insertions.extend(global_insertions)
