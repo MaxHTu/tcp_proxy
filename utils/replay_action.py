@@ -12,7 +12,6 @@ class ReplayAction:
         self.blocking_sessions = defaultdict(dict)
         
     def parse_replay_rules(self) -> Dict[str, Dict[str, Any]]:
-        """Parse replay rules into a structured format."""
         parsed_rules = {}
         
         for rule in self.replay_rules:
@@ -34,7 +33,6 @@ class ReplayAction:
         return parsed_rules
     
     def should_replay(self, message: Dict[str, Any]) -> bool:
-        """Check if a message should trigger a replay."""
         if not isinstance(message, dict):
             return False
             
@@ -57,7 +55,6 @@ class ReplayAction:
         return False
     
     def should_block_original(self, message: Dict[str, Any]) -> bool:
-        """Check if the original message should be blocked due to active replay."""
         if not isinstance(message, dict):
             return False
             
@@ -85,7 +82,6 @@ class ReplayAction:
         return False
     
     def start_replay(self, action: str, original_message: Dict[str, Any]) -> None:
-        """Start a replay session for a specific action."""
         parsed_rules = self.parse_replay_rules()
         rule = parsed_rules.get(action)
         
@@ -116,7 +112,6 @@ class ReplayAction:
             print(f"[REPLAY] Started replay session for action '{action}' - {rule['count']} replays remaining")
     
     def get_replay_insertions(self, message: Dict[str, Any]) -> List[Tuple[bytes, str, str]]:
-        """Get replay insertions for a message."""
         if not isinstance(message, dict):
             return []
             
@@ -159,7 +154,6 @@ class ReplayAction:
         return insertions
     
     def _execute_single_blocking_replay(self, action: str) -> bool:
-        """Execute a single replay for a blocking session."""
         if action not in self.blocking_sessions:
             return False
             
@@ -181,7 +175,6 @@ class ReplayAction:
         return False
     
     def _complete_blocking_session(self, action: str) -> None:
-        """Complete a blocking session when either blocks or replays are exhausted."""
         if action not in self.blocking_sessions:
             return
             
@@ -198,7 +191,6 @@ class ReplayAction:
             del self.active_replays[action]
     
     def _execute_blocking_replays(self, action: str) -> None:
-        """Execute all replays for a blocking session after all blocks are consumed."""
         if action not in self.blocking_sessions:
             return
             
@@ -223,7 +215,6 @@ class ReplayAction:
             print(f"[REPLAY] Completed blocking session for action '{action}'")
     
     def _create_replay_data(self, session: Dict[str, Any], original_message: Dict[str, Any]) -> Optional[bytes]:
-        """Create replay data based on session configuration."""
         if session['data']:
             if isinstance(session['data'], str):
                 return session['data'].encode('utf-8')
@@ -244,17 +235,14 @@ class ReplayAction:
         return None
     
     def get_active_replay_count(self, action: str) -> int:
-        """Get the number of active replay sessions for an action."""
         if action not in self.active_replays:
             return 0
         return len(self.active_replays[action])
     
     def get_total_replay_count(self, action: str) -> int:
-        """Get the total number of replays executed for an action."""
         return self.replay_counters.get(action, 0)
     
     def clear_replays(self, action: str = None) -> None:
-        """Clear replay sessions for a specific action or all actions."""
         if action is None:
             self.active_replays.clear()
             self.replay_counters.clear()
@@ -269,7 +257,6 @@ class ReplayAction:
                 print(f"[REPLAY] Cleared blocking sessions for action '{action}'")
     
     def get_replay_status(self) -> Dict[str, Any]:
-        """Get current replay status for debugging/monitoring."""
         status = {
             'active_replays': {},
             'total_replays': dict(self.replay_counters),
