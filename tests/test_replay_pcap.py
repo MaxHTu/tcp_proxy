@@ -1,11 +1,21 @@
-from scapy.all import rdpcap
-from scapy.layers.inet import TCP
-from scapy.packet import Raw
 import socket
 import time
+from typing import Any
+
+try:
+    from scapy.all import rdpcap
+    from scapy.layers.inet import TCP
+    from scapy.packet import Raw
+except ModuleNotFoundError:
+    rdpcap = None
+    TCP = Any  # type: ignore[assignment]
+    Raw = Any  # type: ignore[assignment]
 
 
 def replay_payloads(pcap_file, server_host, server_port, speed_factor=1.0):
+    if rdpcap is None:
+        raise RuntimeError("scapy is required to replay pcap payloads")
+
     packets = rdpcap(pcap_file)
 
     payload_events = []
@@ -40,8 +50,8 @@ def replay_payloads(pcap_file, server_host, server_port, speed_factor=1.0):
 
 
 if __name__ == "__main__":
-    import sys
     import os
+    import sys
 
     if len(sys.argv) >= 3:
         host = sys.argv[1]

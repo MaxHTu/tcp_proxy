@@ -1,123 +1,208 @@
 import asyncio
-import yaml
-import uvloop
+import copy
+import json
+import os
 import socket
 import struct
+import threading
+import time
+from typing import Any, Dict, Optional
+
+import yaml
+
+try:
+    import uvloop
+except ModuleNotFoundError:
+    uvloop = None
+
+try:
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+except ModuleNotFoundError:
+    FileSystemEventHandler = object  # type: ignore[assignment]
+    Observer = None
+
 from utils.decode_pickle import PickleDecoder
 from utils.payload_handling import PayloadHandler
-import threading
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 
-global_config = {}
+
+global_config: Dict[str, Any] = {}
 config_lock = threading.Lock()
 
-global_payload_handler = None
+global_payload_handler: Optional[PayloadHandler] = None
+global_config_version = 0
 
-def load_config(config_path):
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
 
-def update_payload_handler():
+def log_event(event: str, **fields: Any) -> None:
+    payload = {
+        "component": "tcp_proxy",
+        "event": event,
+        "timestamp": time.time(),
+        **fields,
+    }
+    print(json.dumps(payload, default=str))
+
+
+def load_config(config_path: str) -> Dict[str, Any]:
+    with open(config_path, "r", encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle)
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError("config root must be a mapping")
+    return loaded
+
+
+def update_payload_handler(config_snapshot: Dict[str, Any]) -> bool:
     global global_payload_handler
+    global global_config
+    global global_config_version
+
+    is_valid, errors = PayloadHandler.validate_config(config_snapshot)
+    if not is_valid:
+        log_event("config_reload_failed", reason="validation", errors=errors)
+        return False
+
+    try:
+        next_version = global_config_version + 1
+        next_handler = PayloadHandler(config=copy.deepcopy(config_snapshot), config_version=next_version)
+    except Exception as exc:
+        log_event("config_reload_failed", reason="build", error=str(exc))
+        return False
+
     with config_lock:
-        global_payload_handler = PayloadHandler(config=global_config.copy())
+        global_payload_handler = next_handler
+        global_config.clear()
+        global_config.update(copy.deepcopy(config_snapshot))
+        global_config_version = next_version
+
+    log_event("config_reloaded", config_version=global_config_version)
+    return True
+
 
 class ConfigReloader(FileSystemEventHandler):
-    def __init__(self, config_path):
-        self.config_path = config_path
+    def __init__(self, config_path: str):
+        self.config_path = os.path.abspath(config_path)
 
-    def on_modified(self, event):
-        if event.src_path.endswith(self.config_path):
-            try:
-                new_config = load_config(self.config_path)
-                with config_lock:
-                    global_config.clear()
-                    global_config.update(new_config)
-                update_payload_handler()
-                print(f"[*] Config reloaded from {self.config_path}")
-            except Exception as e:
-                print(f"[!] Failed to reload config: {e}")
+    def on_modified(self, event: Any) -> None:
+        src_path = os.path.abspath(getattr(event, "src_path", ""))
+        if src_path != self.config_path:
+            return
+
+        try:
+            new_config = load_config(self.config_path)
+        except Exception as exc:
+            log_event("config_reload_failed", reason="read", error=str(exc))
+            return
+
+        update_payload_handler(new_config)
 
 
-async def forward_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str, source_ip: str, target_ip: str) -> None:
+async def forward_data(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    direction_label: str,
+    source_ip: str,
+    target_ip: str,
+    connection_id: str,
+) -> None:
     decoder = PickleDecoder()
-    global global_payload_handler
+
     try:
         while True:
             data = await reader.read(16384)
             if not data:
                 break
 
-            # print(f"[DEBUG] {direction}] [{data!r}")
+            frames = decoder.add_data_frames(data)
+            if not frames:
+                continue
 
-            original_data = data
+            for frame in frames:
+                with config_lock:
+                    handler = global_payload_handler
 
-            message_pairs = decoder.add_data_with_raw(data)
+                if handler is None:
+                    writer.write(frame.raw_frame)
+                    await writer.drain()
+                    continue
 
-            if message_pairs:
-                print(f"[{direction}] Decoded {len(message_pairs)} message(s):")
-                for i, (_, formatted_msg) in enumerate(message_pairs, 1):
-                    print(f"[{direction}] Message {i}:")
-                    print(f"{formatted_msg}")
-            else:
-                print(f"[{direction}] No complete messages in chunk ({len(data)} bytes)")
+                decision = await handler.process_frame(
+                    frame=frame,
+                    source_ip=source_ip,
+                    target_ip=target_ip,
+                    connection_id=connection_id,
+                    direction_label=direction_label,
+                )
 
-            should_forward = True
-            insertions = []
+                for insertion in decision.before_insertions:
+                    writer.write(insertion.data)
 
-            for raw_msg, _ in message_pairs:
-                handler = global_payload_handler
-                should_forward, msg_insertions = await handler.process_messages(raw_msg, source_ip, target_ip)
-                insertions.extend(msg_insertions)
+                if decision.forward_original:
+                    writer.write(frame.raw_frame)
 
-                if not should_forward:
-                    break
+                for insertion in decision.after_insertions:
+                    writer.write(insertion.data)
 
-            if should_forward:
-                for insert_data, position, _ in insertions:
-                    if position == "before":
-                        writer.write(insert_data)
-                        await writer.drain()
-                
-                writer.write(original_data)
                 await writer.drain()
 
-                for insert_data, position, _ in insertions:
-                    if position == "after":
-                        writer.write(insert_data)
-                        await writer.drain()
-            else:
-                print(f"[{direction}] Message blocked by rules")
-
-    except Exception as e:
-        print(f"[!] Error forwarding data ({direction}): {e}")
-        # import traceback
-        # traceback.print_exc()
+    except Exception as exc:
+        log_event(
+            "forward_error",
+            connection_id=connection_id,
+            direction=direction_label,
+            error=str(exc),
+        )
     finally:
+        if decoder.buffer:
+            log_event(
+                "partial_frame_dropped",
+                connection_id=connection_id,
+                direction=direction_label,
+                buffered_bytes=len(decoder.buffer),
+            )
         writer.close()
         await writer.wait_closed()
 
-def get_original_dest(sock: socket.socket):
-    SO_ORIGINAL_DST = 80
-    original_dest = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
+
+def get_original_dest(sock: socket.socket) -> tuple[str, int]:
+    so_original_dst = 80
+    original_dest = sock.getsockopt(socket.SOL_IP, so_original_dst, 16)
     port = struct.unpack_from("!H", original_dest, 2)[0]
     ip = socket.inet_ntoa(original_dest[4:8])
     return ip, port
 
+
 async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asyncio.StreamWriter) -> None:
-    client_addr = src_writer.get_extra_info('peername')
-    sock = src_writer.get_extra_info('socket')
+    client_addr = src_writer.get_extra_info("peername")
+    sock = src_writer.get_extra_info("socket")
+
+    if not client_addr or not sock:
+        src_writer.close()
+        await src_writer.wait_closed()
+        return
 
     try:
         orig_dst_ip, orig_dst_port = get_original_dest(sock)
         client_ip, client_port = client_addr
-        print(f"[*] TPROXY connection from {client_ip}:{client_port} intended for {orig_dst_ip}:{orig_dst_port}")
-    except Exception as e:
-         print(f"[!] Error getting socket names: {e}")
-         src_writer.close()
-         await src_writer.wait_closed()
-         return
+    except Exception as exc:
+        log_event("connection_rejected", reason="original_dest_lookup", error=str(exc))
+        src_writer.close()
+        await src_writer.wait_closed()
+        return
+
+    connection_id = f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}@{int(time.time() * 1000)}"
+    log_event(
+        "connection_open",
+        connection_id=connection_id,
+        client_ip=client_ip,
+        client_port=client_port,
+        original_dst_ip=orig_dst_ip,
+        original_dst_port=orig_dst_port,
+    )
+
+    remote_writer: Optional[asyncio.StreamWriter] = None
+
     try:
         remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         remote_socket.setblocking(False)
@@ -126,35 +211,67 @@ async def handle_connection(src_reader: asyncio.StreamReader, src_writer: asynci
         try:
             remote_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             remote_socket.bind((client_ip, client_port))
-            print(f"[*] Outgoing socket bound to {client_ip}:{client_port}")
-        except Exception as e:
-            print(f"[!] Warning: Could not bind outgoing socket to {client_ip}:{client_port} (requires CAP_NET_ADMIN or root): {e}. Proceeding with default source.")
+        except Exception as exc:
+            log_event(
+                "connection_rejected",
+                connection_id=connection_id,
+                reason="transparent_bind",
+                error=str(exc),
+            )
             src_writer.close()
             await src_writer.wait_closed()
             return
 
         loop = asyncio.get_running_loop()
-
         await loop.sock_connect(remote_socket, (orig_dst_ip, orig_dst_port))
 
         remote_reader, remote_writer = await asyncio.open_connection(sock=remote_socket)
-        print(f"[*] Connected to original destination {orig_dst_ip}:{orig_dst_port}")
 
-        client_to_remote = asyncio.create_task(forward_data(src_reader, remote_writer, f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}", client_ip, orig_dst_ip))
-        remote_to_client = asyncio.create_task(forward_data(remote_reader, src_writer, f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}", orig_dst_ip, client_ip))
+        client_to_remote = asyncio.create_task(
+            forward_data(
+                src_reader,
+                remote_writer,
+                f"{client_ip}:{client_port}->{orig_dst_ip}:{orig_dst_port}",
+                client_ip,
+                orig_dst_ip,
+                connection_id,
+            )
+        )
+        remote_to_client = asyncio.create_task(
+            forward_data(
+                remote_reader,
+                src_writer,
+                f"{client_ip}:{client_port}<-{orig_dst_ip}:{orig_dst_port}",
+                orig_dst_ip,
+                client_ip,
+                connection_id,
+            )
+        )
 
-        await asyncio.gather(client_to_remote, remote_to_client)
+        done, pending = await asyncio.wait(
+            [client_to_remote, remote_to_client],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in pending:
+            task.cancel()
+
+        await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.gather(*done, return_exceptions=True)
 
     except ConnectionRefusedError:
-        print(f"[!] Connection refused by {orig_dst_ip}:{orig_dst_port}")
-    except Exception as e:
-        print(f"[!] Error in handle_connection: {e}")
-        #  import traceback
-        # traceback.print_exc()
+        log_event("connection_refused", connection_id=connection_id)
+    except Exception as exc:
+        log_event("connection_error", connection_id=connection_id, error=str(exc))
     finally:
         src_writer.close()
         await src_writer.wait_closed()
-    print(f"[*] Connection from {client_addr[0]}:{client_addr[1]} closed")
+        if remote_writer is not None:
+            remote_writer.close()
+            await remote_writer.wait_closed()
+
+    log_event("connection_closed", connection_id=connection_id)
+
 
 async def start_proxy(src_host: str, src_port: int) -> None:
     listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -168,45 +285,60 @@ async def start_proxy(src_host: str, src_port: int) -> None:
     server = await asyncio.start_server(handle_connection, sock=listening_socket)
 
     addr = server.sockets[0].getsockname()
-    print(f"[*] Listening on {addr[0]}:{addr[1]} (transparent)")
+    log_event("proxy_listening", host=addr[0], port=addr[1], transparent=True)
 
     try:
         async with server:
             await server.serve_forever()
     except asyncio.CancelledError:
-        print("[*] Server cancelled.")
+        log_event("server_cancelled")
         raise
 
-def main():
+
+def main() -> None:
     config_path = "config/config.yaml"
 
-    initial_config = load_config(config_path)
+    try:
+        initial_config = load_config(config_path)
+    except Exception as exc:
+        log_event("startup_failed", reason="config_read", error=str(exc))
+        return
+
+    if not update_payload_handler(initial_config):
+        log_event("startup_failed", reason="invalid_initial_config")
+        return
+
+    observer = None
+    if Observer is not None:
+        event_handler = ConfigReloader(config_path)
+        observer = Observer()
+        observer.schedule(event_handler, path=os.path.dirname(config_path) or ".", recursive=False)
+        observer.daemon = True
+        observer.start()
+        log_event("config_watch_enabled", path=config_path)
+    else:
+        log_event("config_watch_disabled", reason="watchdog_not_installed")
+
     with config_lock:
-        global_config.clear()
-        global_config.update(initial_config)
-    update_payload_handler()
+        src_config = copy.deepcopy(global_config.get("src", {}))
 
-    event_handler = ConfigReloader(config_path)
-    observer = Observer()
-    observer.schedule(event_handler, path="config/", recursive=False)
-    observer.daemon = True
-    observer.start()
-    print(f"[*] Watching {config_path} for changes...")
-
-    src_config = global_config.get("src", {})
     src_host = src_config.get("host", "0.0.0.0")
     src_port = src_config.get("port", 8000)
 
     try:
-        uvloop.run(start_proxy(src_host, src_port))
+        if uvloop is not None:
+            uvloop.run(start_proxy(src_host, src_port))
+        else:
+            asyncio.run(start_proxy(src_host, src_port))
     except KeyboardInterrupt:
-        print("\n[*] Shutting down from keyboard interrupt...")
-    except Exception as e:
-        print(f"[!] Error: {e}")
+        log_event("shutdown", reason="keyboard_interrupt")
+    except Exception as exc:
+        log_event("runtime_error", error=str(exc))
     finally:
-        observer.stop()
-        observer.join()
+        if observer is not None:
+            observer.stop()
+            observer.join()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
