@@ -1,285 +1,255 @@
-import asyncio
-from typing import Dict, Any, List, Tuple, Optional
-from collections import defaultdict
+from __future__ import annotations
+
 import time
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+from utils.contracts import Insertion
+
+
+@dataclass
+class ReplayRule:
+    action: str
+    count: int
+    block_original: bool
+    delay_ms: int
+    data: Any
+    position: str
+
+
+@dataclass
+class ReplaySession:
+    session_id: int
+    action: str
+    original_message: Dict[str, Any]
+    remaining_count: int
+    block_remaining: int
+    block_original: bool
+    delay_ms: int
+    data: Any
+    position: str
+    next_emit_at: float
+    emitted_count: int = 0
+
 
 class ReplayAction:
-    
     def __init__(self, replay_rules: List[Dict[str, Any]]):
-        self.replay_rules = replay_rules
-        self.active_replays = defaultdict(list)
+        self.rules = self._parse_replay_rules(replay_rules)
+        self.sessions: Dict[str, ReplaySession] = {}
         self.replay_counters = defaultdict(int)
-        self.blocking_sessions = defaultdict(dict)
-        
-    def parse_replay_rules(self) -> Dict[str, Dict[str, Any]]:
-        parsed_rules = {}
-        
-        for rule in self.replay_rules:
+        self._session_counter = 0
+
+    def _parse_replay_rules(self, replay_rules: List[Dict[str, Any]]) -> Dict[str, ReplayRule]:
+        parsed_rules: Dict[str, ReplayRule] = {}
+
+        for rule in replay_rules:
             if not isinstance(rule, dict):
                 continue
-                
-            action = rule.get('action')
+
+            action = rule.get("action")
             if not action:
                 continue
-                
-            parsed_rules[action] = {
-                'count': rule.get('count', 1),
-                'block_original': rule.get('block_original', False),
-                'delay_ms': rule.get('delay_ms', 0) if not rule.get('block_original', False) else 0,
-                'data': rule.get('data'),
-                'position': rule.get('position', 'after')
-            }
-            
-        return parsed_rules
-    
-    def should_replay(self, message: Dict[str, Any]) -> bool:
-        if not isinstance(message, dict):
-            return False
-            
-        action = message.get('action')
-        if not action:
-            return False
-            
-        parsed_rules = self.parse_replay_rules()
-        rule = parsed_rules.get(action)
-        
-        if not rule:
-            return False
-            
-        if rule['block_original']:
-            return False
-        else:
-            if action not in self.active_replays:
-                return True
-            
-        return False
-    
-    def should_block_original(self, message: Dict[str, Any]) -> bool:
-        if not isinstance(message, dict):
-            return False
-            
-        action = message.get('action')
-        if not action:
-            return False
-            
-        if action in self.blocking_sessions:
-            blocking_session = self.blocking_sessions[action]
-            if blocking_session['blocks_remaining'] > 0:
-                blocking_session['blocks_remaining'] -= 1
-                
-                replay_executed = self._execute_single_blocking_replay(action)
-                
-                if replay_executed:
-                    print(f"[REPLAY] Blocking {action} call ({blocking_session['blocks_remaining']} blocks remaining, {blocking_session['replay_count']} replays remaining)")
-                else:
-                    print(f"[REPLAY] Blocking {action} call ({blocking_session['blocks_remaining']} blocks remaining, {blocking_session['replay_count']} replays remaining)")
-                
-                if blocking_session['blocks_remaining'] == 0 or blocking_session['replay_count'] == 0:
-                    self._complete_blocking_session(action)
-                
-                return True
-        
-        return False
-    
-    def start_replay(self, action: str, original_message: Dict[str, Any]) -> None:
-        parsed_rules = self.parse_replay_rules()
-        rule = parsed_rules.get(action)
-        
-        if not rule:
-            return
-            
-        replay_session = {
-            'action': action,
-            'original_message': original_message.copy(),
-            'remaining_count': rule['count'],
-            'delay_ms': rule['delay_ms'],
-            'data': rule['data'],
-            'position': rule['position'],
-            'start_time': time.time(),
-            'last_replay_time': 0
-        }
-        
-        self.active_replays[action].append(replay_session)
-        
-        if rule['block_original']:
-            self.blocking_sessions[action] = {
-                'blocks_remaining': rule['count'],
-                'replay_count': rule['count'],
-                'start_time': time.time()
-            }
-            print(f"[REPLAY] Started blocking session for action '{action}' - will block next {rule['count']} calls and replay {rule['count']} times")
-        else:
-            print(f"[REPLAY] Started replay session for action '{action}' - {rule['count']} replays remaining")
-    
-    def get_replay_insertions(self, message: Dict[str, Any]) -> List[Tuple[bytes, str, str]]:
-        if not isinstance(message, dict):
-            return []
-            
-        action = message.get('action')
-        if not action or action not in self.active_replays:
-            return []
-            
-        insertions = []
-        current_time = time.time()
-        
-        sessions_to_remove = []
-        
-        for session in self.active_replays[action]:
-            if action in self.blocking_sessions:
+
+            count = rule.get("count", 1)
+            if not isinstance(count, int) or count < 1:
+                print(f"[!] Warning: Replay rule for '{action}' has invalid count '{count}'. Ignoring.")
                 continue
-                
-            if session['delay_ms'] > 0:
-                if (current_time - session['last_replay_time']) * 1000 < session['delay_ms']:
-                    continue
-                
-            replay_data = self._create_replay_data(session, message)
-            if replay_data:
-                insertions.append((replay_data, session['position'], f"replay_{action}"))
-                session['remaining_count'] -= 1
-                session['last_replay_time'] = current_time
-                
-                print(f"[REPLAY] Executed replay for action '{action}' - {session['remaining_count']} remaining")
-                
-                if session['remaining_count'] <= 0:
-                    sessions_to_remove.append(session)
-        
-        for session in sessions_to_remove:
-            self.active_replays[action].remove(session)
-            self.replay_counters[action] += 1
-            
-        if not self.active_replays[action]:
-            del self.active_replays[action]
-            print(f"[REPLAY] Completed replay session for action '{action}' - Total replays: {self.replay_counters[action]}")
-            
-        return insertions
-    
-    def _execute_single_blocking_replay(self, action: str) -> bool:
-        if action not in self.blocking_sessions:
+
+            block_original = bool(rule.get("block_original", False))
+            delay_ms = rule.get("delay_ms", 0)
+            if not isinstance(delay_ms, (int, float)) or delay_ms < 0:
+                delay_ms = 0
+            delay_ms = int(delay_ms)
+            if block_original:
+                delay_ms = 0
+
+            position = rule.get("position", "after")
+            if position not in ("before", "after"):
+                position = "after"
+
+            parsed_rules[action] = ReplayRule(
+                action=action,
+                count=count,
+                block_original=block_original,
+                delay_ms=delay_ms,
+                data=rule.get("data"),
+                position=position,
+            )
+
+        return parsed_rules
+
+    def _message_action(self, message: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(message, dict):
+            return None
+        action = message.get("action")
+        return action if isinstance(action, str) else None
+
+    def _create_session(self, action: str, message: Dict[str, Any], rule: ReplayRule) -> ReplaySession:
+        self._session_counter += 1
+        session = ReplaySession(
+            session_id=self._session_counter,
+            action=action,
+            original_message=message.copy(),
+            remaining_count=rule.count,
+            block_remaining=rule.count if rule.block_original else 0,
+            block_original=rule.block_original,
+            delay_ms=rule.delay_ms,
+            data=rule.data,
+            position=rule.position,
+            next_emit_at=time.monotonic(),
+        )
+        self.sessions[action] = session
+        print(
+            f"[REPLAY] Started session action='{action}' session_id={session.session_id} "
+            f"count={rule.count} block_original={rule.block_original}"
+        )
+        return session
+
+    def check_replay_block(self, message: Dict[str, Any]) -> bool:
+        action = self._message_action(message)
+        if not action:
             return False
-            
-        blocking_session = self.blocking_sessions[action]
-        if blocking_session['replay_count'] <= 0:
-            return False
-        
-        blocking_session['replay_count'] -= 1
-        
-        if action in self.active_replays and self.active_replays[action]:
-            original_message = self.active_replays[action][0]['original_message']
-            
-            replay_data = self._create_replay_data(self.active_replays[action][0], original_message)
-            if replay_data:
-                print(f"[REPLAY] Executed blocking replay for {action} ({blocking_session['replay_count']} replays remaining)")
-                self.replay_counters[action] += 1
-                return True
-        
+
+        rule = self.rules.get(action)
+        session = self.sessions.get(action)
+
+        if session is None and rule and rule.block_original:
+            session = self._create_session(action, message, rule)
+
+        if session and session.block_remaining > 0:
+            session.block_remaining -= 1
+            print(
+                f"[REPLAY] Blocking action='{action}' session_id={session.session_id} "
+                f"blocks_remaining={session.block_remaining}"
+            )
+            return True
+
         return False
-    
-    def _complete_blocking_session(self, action: str) -> None:
-        if action not in self.blocking_sessions:
-            return
-            
-        blocking_session = self.blocking_sessions[action]
-        
-        if blocking_session['blocks_remaining'] == 0:
-            print(f"[REPLAY] Completed blocking session for action '{action}' - all blocks consumed")
-        elif blocking_session['replay_count'] == 0:
-            print(f"[REPLAY] Completed blocking session for action '{action}' - all replays executed")
-        
-        del self.blocking_sessions[action]
-        
-        if action in self.active_replays:
-            del self.active_replays[action]
-    
-    def _execute_blocking_replays(self, action: str) -> None:
-        if action not in self.blocking_sessions:
-            return
-            
-        blocking_session = self.blocking_sessions[action]
-        replay_count = blocking_session['replay_count']
-        
-        print(f"[REPLAY] Executing {replay_count} replays for {action} after blocking {replay_count} calls")
-        
-        if action in self.active_replays and self.active_replays[action]:
-            original_message = self.active_replays[action][0]['original_message']
-            
-            replay_data = self._create_replay_data(self.active_replays[action][0], original_message)
-            if replay_data:
-                for i in range(replay_count):
-                    print(f"[REPLAY] Executed blocking replay {i+1}/{replay_count} for {action}")
-                    self.replay_counters[action] += 1
-        
-        del self.blocking_sessions[action]
-        
-        if action in self.active_replays:
-            del self.active_replays[action]
-            print(f"[REPLAY] Completed blocking session for action '{action}'")
-    
-    def _create_replay_data(self, session: Dict[str, Any], original_message: Dict[str, Any]) -> Optional[bytes]:
-        if session['data']:
-            if isinstance(session['data'], str):
-                return session['data'].encode('utf-8')
-            elif isinstance(session['data'], bytes):
-                return session['data']
-            else:
-                return str(session['data']).encode('utf-8')
-        else:
-            original_data = original_message.get('data')
-            if original_data:
-                if isinstance(original_data, str):
-                    return original_data.encode('utf-8')
-                elif isinstance(original_data, bytes):
-                    return original_data
-                else:
-                    return str(original_data).encode('utf-8')
-        
-        return None
-    
+
+    def start_replay_if_needed(self, message: Dict[str, Any]) -> bool:
+        action = self._message_action(message)
+        if not action:
+            return False
+
+        if action in self.sessions:
+            return False
+
+        rule = self.rules.get(action)
+        if not rule:
+            return False
+
+        self._create_session(action, message, rule)
+        return True
+
+    def get_replay_insertions(self, message: Dict[str, Any]) -> List[Insertion]:
+        action = self._message_action(message)
+        if not action:
+            return []
+
+        session = self.sessions.get(action)
+        if not session:
+            return []
+
+        insertions: List[Insertion] = []
+        now = time.monotonic()
+        max_emits = 1 if session.block_original else None
+
+        while session.remaining_count > 0:
+            if session.delay_ms > 0 and now < session.next_emit_at:
+                break
+
+            replay_data = self._create_replay_data(session, message)
+            if replay_data is None:
+                print(
+                    f"[REPLAY] Session action='{action}' session_id={session.session_id} has no replay data; ending"
+                )
+                session.remaining_count = 0
+                break
+
+            session.remaining_count -= 1
+            session.emitted_count += 1
+            self.replay_counters[action] += 1
+
+            insertions.append(
+                Insertion(
+                    data=replay_data,
+                    position=session.position,
+                    tag=f"replay_{action}_{session.session_id}_{session.emitted_count}",
+                )
+            )
+
+            print(
+                f"[REPLAY] Emitted replay action='{action}' session_id={session.session_id} "
+                f"remaining={session.remaining_count}"
+            )
+
+            if session.delay_ms > 0:
+                session.next_emit_at = now + (session.delay_ms / 1000.0)
+                break
+
+            if max_emits is not None and len(insertions) >= max_emits:
+                break
+
+        if session.remaining_count == 0 and session.block_remaining == 0:
+            del self.sessions[action]
+            print(
+                f"[REPLAY] Completed session action='{action}' session_id={session.session_id} "
+                f"total_emitted={session.emitted_count}"
+            )
+
+        return insertions
+
+    def _create_replay_data(self, session: ReplaySession, current_message: Dict[str, Any]) -> Optional[bytes]:
+        if session.data is not None:
+            return self._coerce_bytes(session.data)
+
+        original_data = current_message.get("data")
+        if original_data is None:
+            original_data = session.original_message.get("data")
+
+        return self._coerce_bytes(original_data)
+
+    def _coerce_bytes(self, value: Any) -> Optional[bytes]:
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, str):
+            return value.encode("utf-8")
+        return str(value).encode("utf-8")
+
     def get_active_replay_count(self, action: str) -> int:
-        if action not in self.active_replays:
-            return 0
-        return len(self.active_replays[action])
-    
+        return 1 if action in self.sessions else 0
+
     def get_total_replay_count(self, action: str) -> int:
         return self.replay_counters.get(action, 0)
-    
+
     def clear_replays(self, action: str = None) -> None:
         if action is None:
-            self.active_replays.clear()
+            self.sessions.clear()
             self.replay_counters.clear()
-            self.blocking_sessions.clear()
-            print("[REPLAY] Cleared all replay sessions and blocking sessions")
-        else:
-            if action in self.active_replays:
-                del self.active_replays[action]
-                print(f"[REPLAY] Cleared replay sessions for action '{action}'")
-            if action in self.blocking_sessions:
-                del self.blocking_sessions[action]
-                print(f"[REPLAY] Cleared blocking sessions for action '{action}'")
-    
+            print("[REPLAY] Cleared all replay sessions")
+            return
+
+        if action in self.sessions:
+            del self.sessions[action]
+            print(f"[REPLAY] Cleared replay session for action '{action}'")
+
     def get_replay_status(self) -> Dict[str, Any]:
         status = {
-            'active_replays': {},
-            'total_replays': dict(self.replay_counters),
-            'total_active_sessions': sum(len(sessions) for sessions in self.active_replays.values()),
-            'blocking_sessions': {}
+            "active_sessions": {},
+            "total_replays": dict(self.replay_counters),
+            "total_active_sessions": len(self.sessions),
         }
-        
-        for action, sessions in self.active_replays.items():
-            status['active_replays'][action] = [
-                {
-                    'remaining_count': session['remaining_count'],
-                    'delay_ms': session['delay_ms'],
-                    'start_time': session['start_time'],
-                    'last_replay_time': session['last_replay_time']
-                }
-                for session in sessions
-            ]
-        
-        for action, blocking_session in self.blocking_sessions.items():
-            status['blocking_sessions'][action] = {
-                'blocks_remaining': blocking_session['blocks_remaining'],
-                'replay_count': blocking_session['replay_count'],
-                'start_time': blocking_session['start_time']
+
+        for action, session in self.sessions.items():
+            status["active_sessions"][action] = {
+                "session_id": session.session_id,
+                "remaining_count": session.remaining_count,
+                "block_remaining": session.block_remaining,
+                "delay_ms": session.delay_ms,
+                "emitted_count": session.emitted_count,
             }
-            
+
         return status

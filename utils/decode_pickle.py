@@ -1,66 +1,139 @@
-import pickle
-import struct
-import numpy as np
-from typing import Any, List, Optional, Tuple
+import builtins
+import importlib
+import io
 import json
+import pickle  # nosec B403 - restricted unpickler below limits allowed globals
+import struct
+from typing import Any, List, Optional, Tuple
+
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ModuleNotFoundError:
+    class _DummyNdarray:
+        pass
+
+    class _DummyNumpy:
+        ndarray = _DummyNdarray
+
+    np = _DummyNumpy()  # type: ignore[assignment]
+    NUMPY_AVAILABLE = False
+
+from utils.contracts import MessageFrame
+
+
+SAFE_BUILTIN_GLOBALS = {
+    name: getattr(builtins, name)
+    for name in (
+        "bool",
+        "bytearray",
+        "bytes",
+        "complex",
+        "dict",
+        "float",
+        "frozenset",
+        "int",
+        "list",
+        "set",
+        "str",
+        "tuple",
+    )
+}
+
+SAFE_GLOBALS = {("builtins", name): value for name, value in SAFE_BUILTIN_GLOBALS.items()}
+
+
+def _import_optional_module(module_name: str) -> Any:
+    try:
+        return importlib.import_module(module_name)
+    except ImportError:
+        return None
+
+
+def _register_numpy_globals() -> None:
+    if not NUMPY_AVAILABLE:
+        return
+
+    dtype = getattr(np, "dtype", None)
+    ndarray = getattr(np, "ndarray", None)
+    if dtype is not None:
+        SAFE_GLOBALS[("numpy", "dtype")] = dtype
+    if ndarray is not None:
+        SAFE_GLOBALS[("numpy", "ndarray")] = ndarray
+
+    for module_name in ("numpy.core.multiarray", "numpy._core.multiarray"):
+        module = _import_optional_module(module_name)
+        if module is None:
+            continue
+        reconstruct = getattr(module, "_reconstruct", None)
+        if reconstruct is None:
+            continue
+        SAFE_GLOBALS[(module_name, "_reconstruct")] = reconstruct
+
+
+_register_numpy_globals()
+
+
+class RestrictedUnpickler(pickle.Unpickler):
+    def find_class(self, module: str, name: str) -> Any:
+        allowed = SAFE_GLOBALS.get((module, name))
+        if allowed is not None:
+            return allowed
+        raise pickle.UnpicklingError(f"global '{module}.{name}' is not allowed")
+
+
+def restricted_loads(data: bytes) -> Any:
+    return RestrictedUnpickler(io.BytesIO(data)).load()
 
 
 class PickleDecoder:
     def __init__(self):
         self.buffer = bytearray()
 
-    def add_data(self, data: bytes) -> List[Tuple[Any, bytes]]:
-        # print(f"[DEBUG] add_data received {len(data) if data else 0} bytes")
+    def add_data_frames(self, data: bytes) -> List[MessageFrame]:
         if not data:
-            # print("[DEBUG] No data received, returning empty list")
             return []
 
         self.buffer.extend(data)
-        messages = []
+        frames: List[MessageFrame] = []
 
         while len(self.buffer) >= 4:
-            msg_len = struct.unpack('>I', self.buffer[:4])[0]
-            if len(self.buffer) >= 4 + msg_len:
-                full_message = self.buffer[:4 + msg_len]
-                payload = self.buffer[4:4 + msg_len]
-                del self.buffer[:4 + msg_len]
-                decoded_msg = self.decode_message(payload)
-
-                messages.append((decoded_msg, full_message))
-            else:
+            msg_len = struct.unpack(">I", self.buffer[:4])[0]
+            total_len = 4 + msg_len
+            if len(self.buffer) < total_len:
                 break
 
-        # print(f"[DEBUG] add_data returning {len(messages)} messages")
-        # if not messages:
-            # print(f"[DEBUG] Buffer state: {self.get_buffer_info()}")
+            raw_frame = bytes(self.buffer[:total_len])
+            payload = bytes(self.buffer[4:total_len])
+            del self.buffer[:total_len]
 
+            decoded_msg, decode_error = self._decode_message_with_error(payload)
+            frames.append(
+                MessageFrame(
+                    length_prefix=raw_frame[:4],
+                    payload=payload,
+                    raw_frame=raw_frame,
+                    decoded=decoded_msg,
+                    decode_error=decode_error,
+                )
+            )
+
+        return frames
+
+    def add_data(self, data: bytes) -> List[Tuple[Any, bytes]]:
+        messages = []
+        for frame in self.add_data_frames(data):
+            messages.append((frame.decoded, frame.raw_frame))
         return messages
 
     def add_data_with_raw(self, data: bytes) -> List[Tuple[Any, str]]:
-        # print(f"[DEBUG] add_data received {len(data) if data else 0} bytes")
-        if not data:
-            # print("[DEBUG] No data received, returning empty list")
-            return []
-
-        self.buffer.extend(data)
         messages = []
-
-        while len(self.buffer) > 4:
-            msg_len = struct.unpack('>I', self.buffer[:4])[0]
-            if len(self.buffer) >= 4 + msg_len:
-                payload = self.buffer[4:4 + msg_len]
-                del self.buffer[:4 + msg_len]
-                decoded_msg = self.decode_message(payload)
-                formatted_output = PickleDecoder.format_message(decoded_msg)
-                messages.append((decoded_msg, formatted_output))
+        for frame in self.add_data_frames(data):
+            if frame.decode_error:
+                formatted_output = f"Decode error: {frame.decode_error}"
             else:
-                break
-
-
-        # print(f"[DEBUG] add_data returning {len(messages)} messages")
-        # if not messages:
-            # print(f"[DEBUG] Buffer state: {self.get_buffer_info()}")
-
+                formatted_output = PickleDecoder.format_message(frame.decoded)
+            messages.append((frame.decoded, formatted_output))
         return messages
 
     def get_buffer_info(self) -> str:
@@ -72,51 +145,53 @@ class PickleDecoder:
 
         if len(self.buffer) >= 4:
             try:
-                msg_len = struct.unpack('>I', self.buffer[:4])[0]
-                return f"Buffer: {len(self.buffer)} bytes, Expected message length: {msg_len}, Preview: {buffer_preview}"
-            except Exception as e:
-                return f"Buffer: {len(self.buffer)} bytes, Error unpacking length: {e}, Preview: {buffer_preview}"
-        else:
-            return f"Buffer: {len(self.buffer)} bytes (insufficient for length header), Preview: {buffer_preview}"
+                msg_len = struct.unpack(">I", self.buffer[:4])[0]
+                return (
+                    f"Buffer: {len(self.buffer)} bytes, Expected message length: {msg_len}, "
+                    f"Preview: {buffer_preview}"
+                )
+            except Exception as exc:
+                return (
+                    f"Buffer: {len(self.buffer)} bytes, Error unpacking length: {exc}, "
+                    f"Preview: {buffer_preview}"
+                )
 
-    def decode_message(self, msg_data: bytes) -> Any:
-        # print(f"[DEBUG] decode_message received {len(msg_data)} bytes starting with {msg_data[:10].hex()}")
-        if msg_data.startswith(b'\x80\x04\x95'):
+        return f"Buffer: {len(self.buffer)} bytes (insufficient for length header), Preview: {buffer_preview}"
+
+    def _decode_message_with_error(self, msg_data: bytes) -> Tuple[Any, Optional[str]]:
+        if msg_data.startswith(b"\x80\x04\x95"):
             try:
-                return pickle.loads(msg_data)
-            except Exception as e:
-               # print(f"[DEBUG] Pickle decode error: {e}, data: {msg_data[:50].hex()}")
-                return f"Failed to decode pickle: {e}"
-        else:
-            try:
-                text = msg_data.decode('utf-8', errors='replace')
-                if text.startswith('#'):
-                    return text
-                else:
-                    return f"Text: {text}"
-            except UnicodeDecodeError:
-                # print(f"[DEBUG] Binary data: {msg_data[:50].hex()}")
-                return f"Raw binary ({len(msg_data)} bytes)"
+                return restricted_loads(msg_data), None
+            except Exception as exc:
+                return None, f"pickle decode failed: {exc}"
+
+        try:
+            text = msg_data.decode("utf-8", errors="replace")
+            if text.startswith("#"):
+                return text, None
+            return f"Text: {text}", None
+        except UnicodeDecodeError:
+            return f"Raw binary ({len(msg_data)} bytes)", None
 
     @staticmethod
     def format_message(msg: Any) -> str:
         if isinstance(msg, dict):
             formatted_dict = {}
-            for k, v in msg.items():
-                if isinstance(v, np.ndarray):
-                    formatted_dict[k] = PickleDecoder.format_numpy_array(v)
-                elif isinstance(v, dict):
+            for key, value in msg.items():
+                if isinstance(value, np.ndarray):
+                    formatted_dict[key] = PickleDecoder.format_numpy_array(value)
+                elif isinstance(value, dict):
                     nested_dict = {}
-                    for nk, nv in v.items():
-                        if isinstance(nv, np.ndarray):
-                            nested_dict[nk] = PickleDecoder.format_numpy_array(nv)
+                    for nested_key, nested_value in value.items():
+                        if isinstance(nested_value, np.ndarray):
+                            nested_dict[nested_key] = PickleDecoder.format_numpy_array(nested_value)
                         else:
-                            nested_dict[nk] = nv
-                    formatted_dict[k] = nested_dict
+                            nested_dict[nested_key] = nested_value
+                    formatted_dict[key] = nested_dict
                 else:
-                    formatted_dict[k] = v
+                    formatted_dict[key] = value
             return json.dumps(formatted_dict, indent=2)
-        elif isinstance(msg, np.ndarray):
+        if isinstance(msg, np.ndarray):
             return PickleDecoder.format_numpy_array(msg)
         return str(msg)
 
