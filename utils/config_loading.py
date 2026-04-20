@@ -1,3 +1,5 @@
+"""Normalize YAML config into typed runtime objects before traffic is handled."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +11,8 @@ from utils.contracts import DirectionRuleSetConfig, ProxyConfig, RuleSetConfig, 
 
 
 class ConfigValidationError(ValueError):
+    """Raised when config cannot be normalized into a safe runtime contract."""
+
     def __init__(self, errors: List[str]):
         super().__init__("; ".join(errors))
         self.errors = errors
@@ -16,11 +20,14 @@ class ConfigValidationError(ValueError):
 
 @dataclass(frozen=True)
 class LoadedProxyConfig:
+    """Validated proxy config plus non-fatal normalization warnings."""
+
     config: ProxyConfig
     warnings: Tuple[str, ...] = ()
 
 
 def load_proxy_config(config_path: str) -> LoadedProxyConfig:
+    """Read and normalize a YAML config file."""
     with open(config_path, "r", encoding="utf-8") as handle:
         loaded = yaml.safe_load(handle)
 
@@ -34,6 +41,7 @@ def load_proxy_config(config_path: str) -> LoadedProxyConfig:
 
 
 def normalize_proxy_config(config: Dict[str, Any]) -> LoadedProxyConfig:
+    """Convert raw YAML-shaped config into typed structures used by the hot path."""
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -127,6 +135,7 @@ def _parse_directions(raw_directions: Any, errors: List[str], warnings: List[str
 
 
 def _parse_rule_set(raw_rules: Any, scope: str, errors: List[str], warnings: List[str]) -> RuleSetConfig:
+    """Precompute rule collections so frame handling does not parse YAML-shaped dicts."""
     if raw_rules is None:
         raw_rules = {}
     if not isinstance(raw_rules, dict):

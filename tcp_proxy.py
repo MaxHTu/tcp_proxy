@@ -28,6 +28,7 @@ from utils.contracts import ForwardingContext, SourceConfig
 
 
 def log_event(event: str, **fields: Any) -> None:
+    """Emit machine-readable proxy events for operators and tests."""
     payload = {
         "component": "tcp_proxy",
         "event": event,
@@ -39,12 +40,16 @@ def log_event(event: str, **fields: Any) -> None:
 
 @dataclass(frozen=True)
 class RuntimeSnapshot:
+    """Consistent runtime view used by startup code and tests."""
+
     source: SourceConfig
     payload_handler: PayloadHandler
     config_version: int
 
 
 class ProxyRuntimeState:
+    """Owns reloadable proxy config without exposing module-global state."""
+
     def __init__(self, config_path: str):
         self.config_path = os.path.abspath(config_path)
         self._lock = threading.Lock()
@@ -53,6 +58,7 @@ class ProxyRuntimeState:
         self._config_version = 0
 
     def load_initial(self) -> None:
+        """Load the initial config before the listener is bound."""
         loaded = load_proxy_config(self.config_path)
         self._log_warnings(loaded.warnings, phase="initial")
 
@@ -71,6 +77,7 @@ class ProxyRuntimeState:
         )
 
     def reload_from_file(self) -> bool:
+        """Reload payload rules while keeping the already-bound listener stable."""
         try:
             loaded = load_proxy_config(self.config_path)
         except ConfigValidationError as exc:
@@ -83,6 +90,7 @@ class ProxyRuntimeState:
         current = self.snapshot()
         self._log_warnings(loaded.warnings, phase="reload")
 
+        # Changing src.host/src.port after bind would require rebuilding the server socket.
         if loaded.config.source != current.source:
             log_event(
                 "config_reload_listener_ignored",
@@ -106,7 +114,15 @@ class ProxyRuntimeState:
         log_event("config_reloaded", path=self.config_path, config_version=next_version)
         return True
 
+    def payload_handler(self) -> PayloadHandler:
+        """Return the current handler without allocating a full snapshot per frame."""
+        with self._lock:
+            if self._payload_handler is None:
+                raise RuntimeError("runtime state has not been initialized")
+            return self._payload_handler
+
     def snapshot(self) -> RuntimeSnapshot:
+        """Return a full runtime snapshot for low-frequency control paths."""
         with self._lock:
             if self._source is None or self._payload_handler is None:
                 raise RuntimeError("runtime state has not been initialized")
@@ -123,6 +139,8 @@ class ProxyRuntimeState:
 
 
 class ConfigReloader(FileSystemEventHandler):
+    """Watchdog adapter that reloads only the configured YAML file."""
+
     def __init__(self, runtime_state: ProxyRuntimeState):
         self.runtime_state = runtime_state
         self.config_path = runtime_state.config_path
@@ -135,12 +153,32 @@ class ConfigReloader(FileSystemEventHandler):
         self.runtime_state.reload_from_file()
 
 
+async def finish_writer_output(writer: asyncio.StreamWriter, context: ForwardingContext) -> None:
+    """Signal EOF to the peer without closing the opposite read direction."""
+    try:
+        if writer.can_write_eof():
+            writer.write_eof()
+            await writer.drain()
+            return
+    except (ConnectionError, OSError, RuntimeError) as exc:
+        log_event(
+            "writer_eof_failed",
+            connection_id=context.connection_id,
+            direction=context.direction_label,
+            error=str(exc),
+        )
+
+    writer.close()
+    await writer.wait_closed()
+
+
 async def forward_data(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     runtime_state: ProxyRuntimeState,
     context: ForwardingContext,
 ) -> None:
+    """Forward one direction of traffic through the frame-aware rule engine."""
     decoder = PickleDecoder()
 
     try:
@@ -154,8 +192,8 @@ async def forward_data(
                 continue
 
             for frame in frames:
-                snapshot = runtime_state.snapshot()
-                decision = await snapshot.payload_handler.process_frame(
+                handler = runtime_state.payload_handler()
+                decision = await handler.process_frame(
                     frame=frame,
                     context=context,
                 )
@@ -186,11 +224,11 @@ async def forward_data(
                 direction=context.direction_label,
                 buffered_bytes=len(decoder.buffer),
             )
-        writer.close()
-        await writer.wait_closed()
+        await finish_writer_output(writer, context)
 
 
 def get_original_dest(sock: socket.socket) -> tuple[str, int]:
+    """Read Linux SO_ORIGINAL_DST for a transparently redirected connection."""
     so_original_dst = 80
     original_dest = sock.getsockopt(socket.SOL_IP, so_original_dst, 16)
     port = struct.unpack_from("!H", original_dest, 2)[0]
@@ -203,6 +241,7 @@ async def handle_connection(
     src_writer: asyncio.StreamWriter,
     runtime_state: ProxyRuntimeState,
 ) -> None:
+    """Bridge a redirected client connection to its original destination."""
     client_addr = src_writer.get_extra_info("peername")
     sock = src_writer.get_extra_info("socket")
 
@@ -235,6 +274,7 @@ async def handle_connection(
     try:
         remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         remote_socket.setblocking(False)
+        # IP_TRANSPARENT requires Linux support and elevated network privileges.
         remote_socket.setsockopt(socket.SOL_IP, socket.IP_TRANSPARENT, 1)
 
         try:
@@ -283,16 +323,12 @@ async def handle_connection(
             )
         )
 
-        done, pending = await asyncio.wait(
-            [client_to_remote, remote_to_client],
-            return_when=asyncio.FIRST_COMPLETED,
+        # A TCP half-close in one direction is not the end of the whole exchange.
+        await asyncio.gather(
+            client_to_remote,
+            remote_to_client,
+            return_exceptions=True,
         )
-
-        for task in pending:
-            task.cancel()
-
-        await asyncio.gather(*pending, return_exceptions=True)
-        await asyncio.gather(*done, return_exceptions=True)
 
     except ConnectionRefusedError:
         log_event("connection_refused", connection_id=connection_id)
@@ -309,8 +345,10 @@ async def handle_connection(
 
 
 async def start_proxy(src_host: str, src_port: int, runtime_state: ProxyRuntimeState) -> None:
+    """Bind the transparent listening socket and serve connections forever."""
     listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listening_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # The proxy is intended for transparent interception, not ordinary TCP forwarding.
     listening_socket.setsockopt(socket.SOL_IP, socket.IP_TRANSPARENT, 1)
 
     listening_socket.bind((src_host, src_port))
@@ -334,6 +372,7 @@ async def start_proxy(src_host: str, src_port: int, runtime_state: ProxyRuntimeS
 
 
 def main() -> None:
+    """Start the proxy from the default project config file."""
     config_path = "config/config.yaml"
     runtime_state = ProxyRuntimeState(config_path)
 

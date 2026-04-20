@@ -20,7 +20,10 @@ from utils.replay_action import ReplayAction
 
 
 class PayloadHandler:
+    """Applies normalized global and direction-specific payload rules."""
+
     def __init__(self, config: Optional[ProxyConfig | Dict[str, Any]] = None, config_version: int = 0):
+        # Normalize once at construction so frame handling avoids YAML-shaped config parsing.
         self.config = self._normalize_config(config)
         self.config_version = config_version
         self.direction_lookup: Dict[Tuple[str, str], DirectionContext] = {}
@@ -45,6 +48,7 @@ class PayloadHandler:
 
     @staticmethod
     def validate_config(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """Validate raw config through the same normalization path used at runtime."""
         try:
             normalize_proxy_config(config)
         except ConfigValidationError as exc:
@@ -81,6 +85,7 @@ class PayloadHandler:
         frame: MessageFrame,
         context: ForwardingContext,
     ) -> RuleDecision:
+        """Evaluate one decoded frame and return the writes/drop decision."""
         decision = RuleDecision(forward_original=True)
 
         if frame.decode_error:

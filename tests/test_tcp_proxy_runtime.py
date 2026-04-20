@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from tcp_proxy import ProxyRuntimeState
+from tcp_proxy import ProxyRuntimeState, finish_writer_output
 from utils.contracts import ForwardingContext, MessageFrame
 
 
@@ -32,6 +32,44 @@ def make_frame(action: str) -> MessageFrame:
     )
 
 
+class FakeHalfCloseWriter:
+    def __init__(self):
+        self.eof_written = False
+        self.closed = False
+        self.drained = False
+
+    def can_write_eof(self):
+        return True
+
+    def write_eof(self):
+        self.eof_written = True
+
+    async def drain(self):
+        self.drained = True
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        pass
+
+
+def test_finish_writer_output_prefers_half_close():
+    writer = FakeHalfCloseWriter()
+    context = ForwardingContext(
+        connection_id="conn-1",
+        direction_label="unit-test",
+        source_ip="10.0.0.1",
+        target_ip="10.0.0.2",
+    )
+
+    asyncio.run(finish_writer_output(writer, context))
+
+    assert writer.eof_written is True
+    assert writer.drained is True
+    assert writer.closed is False
+
+
 def test_runtime_reload_updates_handler_but_keeps_boot_listener(tmp_path):
     config_path = tmp_path / "config.yaml"
     write_config(config_path, host="127.0.0.1", port=9000, blocked_action="first")
@@ -50,6 +88,7 @@ def test_runtime_reload_updates_handler_but_keeps_boot_listener(tmp_path):
     assert reloaded_snapshot.source.host == "127.0.0.1"
     assert reloaded_snapshot.source.port == 9000
     assert reloaded_snapshot.config_version == 1
+    assert runtime_state.payload_handler() is reloaded_snapshot.payload_handler
 
     context = ForwardingContext(
         connection_id="conn-1",

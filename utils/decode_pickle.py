@@ -75,6 +75,8 @@ _register_numpy_globals()
 
 
 class RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that refuses globals outside the proxy's supported message types."""
+
     def find_class(self, module: str, name: str) -> Any:
         allowed = SAFE_GLOBALS.get((module, name))
         if allowed is not None:
@@ -83,14 +85,18 @@ class RestrictedUnpickler(pickle.Unpickler):
 
 
 def restricted_loads(data: bytes) -> Any:
+    """Decode pickle bytes without allowing arbitrary class/function loading."""
     return RestrictedUnpickler(io.BytesIO(data)).load()
 
 
 class PickleDecoder:
+    """Incrementally decode length-prefixed payload frames from a TCP byte stream."""
+
     def __init__(self):
         self.buffer = bytearray()
 
     def add_data_frames(self, data: bytes) -> List[MessageFrame]:
+        """Append bytes and return every complete frame currently buffered."""
         if not data:
             return []
 
@@ -161,6 +167,7 @@ class PickleDecoder:
     def _decode_message_with_error(self, msg_data: bytes) -> Tuple[Any, Optional[str]]:
         if msg_data.startswith(b"\x80\x04\x95"):
             try:
+                # Network pickles remain risky; the restricted loader is the safety boundary.
                 return restricted_loads(msg_data), None
             except Exception as exc:
                 return None, f"pickle decode failed: {exc}"

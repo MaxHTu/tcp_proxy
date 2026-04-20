@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 @dataclass(frozen=True)
 class MessageFrame:
+    """Decoded view of one length-prefixed message while preserving raw bytes."""
+
     length_prefix: bytes
     payload: bytes
     raw_frame: bytes
@@ -48,6 +50,8 @@ class ReplayActionProtocol(Protocol):
 
 @dataclass
 class RuleDecision:
+    """Result of applying rules to one frame."""
+
     forward_original: bool
     before_insertions: List[Insertion] = field(default_factory=list)
     after_insertions: List[Insertion] = field(default_factory=list)
@@ -90,6 +94,8 @@ class SourceConfig:
 
 @dataclass(frozen=True)
 class ProxyConfig:
+    """Normalized proxy config used to build runtime handlers."""
+
     source: SourceConfig = field(default_factory=SourceConfig)
     global_rules: RuleSetConfig = field(default_factory=RuleSetConfig)
     directions: Tuple[DirectionRuleSetConfig, ...] = field(default_factory=tuple)
@@ -97,6 +103,8 @@ class ProxyConfig:
 
 @dataclass(frozen=True)
 class ForwardingContext:
+    """Connection metadata for one traffic direction through the proxy."""
+
     connection_id: str
     direction_label: str
     source_ip: str
