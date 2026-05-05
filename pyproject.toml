@@ -1,7 +1,23 @@
 [project]
 name = "tcp-proxy"
 version = "0.1.0"
-description = "Add your description here"
+description = "Transparent TCP proxy with frame-aware rule handling"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "PyYAML>=6.0",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+runtime = [
+  "uvloop>=0.19; platform_system != 'Windows'",
+  "watchdog>=4.0",
+]
+test = [
+  "pytest>=8.0",
+  "scapy>=2.5",
+]
+integration = [
+  "mininet>=2.3; platform_system == 'Linux'",
+]
