@@ -13,6 +13,7 @@ from utils.contracts import (
     MessageFrame,
     ProxyConfig,
     RuleDecision,
+    RuleSetConfig,
 )
 from utils.delay_action import DelayAction
 from utils.insert_action import InsertAction
@@ -26,6 +27,7 @@ class PayloadHandler:
         # Normalize once at construction so frame handling avoids YAML-shaped config parsing.
         self.config = self._normalize_config(config)
         self.config_version = config_version
+        self.requires_frame_processing = self._has_effective_rules()
         self.direction_lookup: Dict[Tuple[str, str], DirectionContext] = {}
         self.global_delay_action = DelayAction(self.config.global_rules.delay_rules)
         self.global_block_action = BlockAction(self.config.global_rules.block_rules)
@@ -61,6 +63,22 @@ class PayloadHandler:
         if config is None:
             return ProxyConfig()
         return normalize_proxy_config(config).config
+
+    @staticmethod
+    def _rule_set_has_actions(rule_set: RuleSetConfig) -> bool:
+        return bool(
+            rule_set.delay_rules
+            or rule_set.block_rules
+            or rule_set.insert_rules
+            or rule_set.replay_rules
+        )
+
+    def _has_effective_rules(self) -> bool:
+        """Return whether this handler can mutate, delay, or drop frames."""
+        if self._rule_set_has_actions(self.config.global_rules):
+            return True
+
+        return any(self._rule_set_has_actions(direction.rules) for direction in self.config.directions)
 
     def get_matching_direction(self, source_ip: str, target_ip: str) -> Optional[DirectionContext]:
         return self.direction_lookup.get((source_ip, target_ip))

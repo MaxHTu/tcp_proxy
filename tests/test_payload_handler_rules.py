@@ -183,3 +183,33 @@ def test_delay_ms_is_applied_from_global_and_direction_rules():
     decision = run_process(handler, make_frame("slow"), source_ip="10.0.0.1", target_ip="10.0.0.2")
     assert decision.forward_original is True
     assert decision.delayed_ms == 3
+
+
+def test_empty_placeholder_rules_do_not_require_frame_processing():
+    handler = PayloadHandler(
+        {
+            "payload_handling": {
+                "global": {
+                    "delay": [{"action": "", "delay_ms": 0}],
+                    "block": [{"action": ""}],
+                    "insert": [{"action": "", "position": "before", "data": "deadbeef"}],
+                    "replay": [{"action": "", "count": 1}],
+                },
+                "directions": {
+                    "alice_to_bob": {
+                        "source_ip": "10.10.20.11",
+                        "target_ip": "10.10.20.13",
+                        "insert": [{"action": "", "position": "after", "data": "deadbeef"}],
+                    }
+                },
+            }
+        }
+    )
+
+    assert handler.requires_frame_processing is False
+
+
+def test_effective_rules_require_frame_processing():
+    handler = PayloadHandler({"payload_handling": {"global": {"block": [{"action": "drop_me"}]}}})
+
+    assert handler.requires_frame_processing is True

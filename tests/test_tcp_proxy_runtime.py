@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from tcp_proxy import ProxyRuntimeState, finish_writer_output
+from tcp_proxy import ProxyRuntimeState, finish_writer_output, forward_data
 from utils.contracts import ForwardingContext, MessageFrame
 
 
@@ -49,6 +49,41 @@ class FakeHalfCloseWriter:
 
     def close(self):
         self.closed = True
+
+    async def wait_closed(self):
+        pass
+
+
+class FakeReader:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+
+    async def read(self, _size):
+        if not self.chunks:
+            return b""
+        return self.chunks.pop(0)
+
+
+class FakeStreamWriter:
+    def __init__(self):
+        self.writes = []
+        self.eof_written = False
+        self.drain_count = 0
+
+    def write(self, data):
+        self.writes.append(data)
+
+    def can_write_eof(self):
+        return True
+
+    def write_eof(self):
+        self.eof_written = True
+
+    async def drain(self):
+        self.drain_count += 1
+
+    def close(self):
+        pass
 
     async def wait_closed(self):
         pass
@@ -133,3 +168,37 @@ def test_runtime_initial_load_rejects_invalid_src_port(tmp_path):
         assert "src.port must be an integer" in str(exc)
     else:
         raise AssertionError("Expected invalid port configuration to raise")
+
+
+def test_forward_data_passthrough_writes_incomplete_frame_when_no_rules(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "src:",
+                '  host: "127.0.0.1"',
+                "  port: 9000",
+                "payload_handling:",
+                "  global: {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runtime_state = ProxyRuntimeState(str(config_path))
+    runtime_state.load_initial()
+
+    partial_frame = (10).to_bytes(4, "big") + b"abc"
+    reader = FakeReader([partial_frame])
+    writer = FakeStreamWriter()
+    context = ForwardingContext(
+        connection_id="conn-1",
+        direction_label="unit-test",
+        source_ip="10.0.0.1",
+        target_ip="10.0.0.2",
+    )
+
+    asyncio.run(forward_data(reader, writer, runtime_state, context))
+
+    assert writer.writes == [partial_frame]
+    assert writer.eof_written is True

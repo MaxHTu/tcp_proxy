@@ -27,6 +27,9 @@ from utils.config_loading import ConfigValidationError, load_proxy_config
 from utils.contracts import ForwardingContext, SourceConfig
 
 
+READ_CHUNK_SIZE = 64 * 1024
+
+
 def log_event(event: str, **fields: Any) -> None:
     """Emit machine-readable proxy events for operators and tests."""
     payload = {
@@ -179,13 +182,29 @@ async def forward_data(
     context: ForwardingContext,
 ) -> None:
     """Forward one direction of traffic through the frame-aware rule engine."""
-    decoder = PickleDecoder()
+    initial_handler = runtime_state.payload_handler()
+    frame_processing_enabled = initial_handler.requires_frame_processing
+    decoder = PickleDecoder() if frame_processing_enabled else None
+    if decoder is None:
+        log_event(
+            "raw_passthrough_enabled",
+            connection_id=context.connection_id,
+            direction=context.direction_label,
+            config_version=initial_handler.config_version,
+        )
 
     try:
         while True:
-            data = await reader.read(16384)
+            data = await reader.read(READ_CHUNK_SIZE)
             if not data:
                 break
+
+            if decoder is None:
+                # Mode is fixed per direction; mid-stream rule activation cannot safely
+                # reinterpret bytes that were already forwarded without frame decoding.
+                writer.write(data)
+                await writer.drain()
+                continue
 
             frames = decoder.add_data_frames(data)
             if not frames:
@@ -217,7 +236,7 @@ async def forward_data(
             error=str(exc),
         )
     finally:
-        if decoder.buffer:
+        if decoder is not None and decoder.buffer:
             log_event(
                 "partial_frame_dropped",
                 connection_id=context.connection_id,
